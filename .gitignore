@@ -1,0 +1,19 @@
+/node_modules/
+/.nuxt/
+/.output/
+/.data/
+/media/
+.env
+.env.*
+!.env.example
+.test-artifacts/
+.test-tools/
+*.sqlite
+*.sqlite-*
+*.log
+/.demo/
+/.demo-assets/
+# Local AI-assistant working notes, not part of the project.
+/AGENTS.md
+__pycache__/
+*.pyc

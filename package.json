@@ -1,0 +1,42 @@
+{
+  "name": "night-film-library",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": { "node": "^24.15.0 || >=26.0.0" },
+  "packageManager": "pnpm@11.28.5",
+  "scripts": {
+    "dev": "nuxt dev --host 127.0.0.1",
+    "build": "nuxt build",
+    "start": "node scripts/start.mjs",
+    "typecheck": "nuxt typecheck",
+    "admin:create": "node scripts/create-admin.mjs",
+    "test": "node --test tests/unit/*.test.mjs",
+    "test:http": "node --test tests/http.test.mjs",
+    "test:browser": "node --test tests/browser.test.mjs",
+    "test:poster": "node --test tests/bulk-poster.test.mjs",
+    "test:series": "node --test tests/multi-upload.test.mjs",
+    "test:episodes": "node --test tests/episode-grid.test.mjs",
+    "test:frame": "node --test tests/frame.test.mjs",
+    "test:control": "node --test tests/control.test.mjs",
+    "demo:seed": "node scripts/seed-demo.mjs",
+    "demo:posters": "python scripts/build-demo-posters.py",
+    "demo:review": "node scripts/demo-review.mjs",
+    "demo:flow": "node scripts/flow-check.mjs"
+  },
+  "dependencies": {
+    "h3": "^1.15.11",
+    "nuxt": "4.7.0",
+    "vue": "^3.5.46",
+    "vue-router": "^5.5.1",
+    "zod": "^4.1.0"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "^4.1.0",
+    "@types/node": "^24.0.0",
+    "playwright-core": "^1.65.1",
+    "tailwindcss": "^4.1.0",
+    "typescript": "^5.9.3",
+    "vue-tsc": "^3.3.14"
+  }
+}
