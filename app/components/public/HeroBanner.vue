@@ -154,15 +154,28 @@ const meta = computed(() => {
 .hero-actions { display: flex; flex-wrap: wrap; gap: 0.7rem; margin: 1.6rem 0 0; }
 .hero-btn { min-block-size: 46px; padding-inline: 1.35rem; font-size: 0.92rem; }
 .hero-btn svg { inline-size: 1rem; block-size: 1rem; }
-.hero-dots { position: absolute; inset-inline-end: var(--shell-pad); inset-block-end: clamp(2.2rem, 6vw, 5rem); display: flex; gap: 0.45rem; }
+.hero-dots { position: absolute; inset-inline-end: var(--shell-pad); inset-block-end: clamp(2.2rem, 6vw, 5rem); display: flex; gap: 0.15rem; }
+/* The visible bar is 3px tall, so the button carries an invisible touch area around
+   it: a 3px hit target is unusable on a phone. */
 .hero-dot-btn {
   inline-size: 26px;
   block-size: 3px;
+  /* Padding is part of the hit area but the background only paints the content box. */
   padding: 0;
+  margin-block: 0;
   border: 0;
   border-radius: 2px;
   background: rgb(255 255 255 / 0.24);
+  background-clip: content-box;
   transition: background-color var(--dur-fast) var(--ease), inline-size var(--dur) var(--ease);
+  position: relative;
+}
+/* Expand the tap target without affecting layout or the visible bar. */
+.hero-dot-btn::after {
+  content: '';
+  position: absolute;
+  inset-block: -18px;
+  inset-inline: -8px;
 }
 .hero-dot-btn.is-active { inline-size: 40px; background: var(--accent); }
 

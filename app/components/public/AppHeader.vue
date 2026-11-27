@@ -121,7 +121,7 @@ const accountName = computed(() => username.value)
   margin-inline: auto;
   padding-inline: var(--shell-pad);
 }
-.brand { display: inline-flex; align-items: center; gap: 0.55rem; text-decoration: none; flex: none; }
+.brand { display: inline-flex; align-items: center; gap: 0.55rem; min-block-size: 44px; text-decoration: none; flex: none; }
 .brand-mark { display: grid; place-items: center; inline-size: 1.6rem; block-size: 1.6rem; color: var(--accent); }
 .brand-mark svg { inline-size: 100%; block-size: 100%; }
 .brand-text { font-size: 1.15rem; font-weight: 700; letter-spacing: 0.14em; }
@@ -167,7 +167,10 @@ const accountName = computed(() => username.value)
 .nav-account {
   display: inline-flex;
   align-items: center;
+  justify-content: center;
   gap: 0.45rem;
+  min-inline-size: 44px;
+  min-block-size: 44px;
   padding: 0.2rem 0.55rem 0.2rem 0.2rem;
   border-radius: var(--radius-pill);
   color: var(--text-secondary);
@@ -227,6 +230,7 @@ const accountName = computed(() => username.value)
 @media (max-width: 34rem) {
   .nav-search { inline-size: 2.4rem; }
   .nav-account-label { display: none; }
-  .nav-account { padding: 0; }
+  /* The label is hidden but the button keeps a full touch target. */
+  .nav-account { padding: 0; min-inline-size: 44px; min-block-size: 44px; }
 }
 </style>
