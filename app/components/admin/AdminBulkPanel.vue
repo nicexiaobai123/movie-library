@@ -287,7 +287,6 @@ async function saveDefault() {
           :disabled="publishing || disabled"
           data-test="admin-bulk-description"
         />
-        <p class="bulk-hint">「补齐」时默认只填空白项；勾选覆盖才会改写已有内容。</p>
       </div>
 
       <div class="bulk-actions">
@@ -309,7 +308,8 @@ async function saveDefault() {
 <style scoped>
 .bulk-panel {
   min-width: 0;
-  padding-block: clamp(1.1rem, 2vw, 1.5rem);
+  /* The page already spaces its bands, so the panel adds no top padding of its own. */
+  padding-block: 0 clamp(1.1rem, 2vw, 1.5rem);
   border-block-end: 1px solid var(--border);
 }
 .bulk-empty,
@@ -324,7 +324,8 @@ async function saveDefault() {
   display: flex;
   flex-wrap: wrap;
   gap: 0 1.7rem;
-  margin-block: 1.2rem 0;
+  /* Sits directly under the tab strip; no extra top margin. */
+  margin-block: 0;
   border-block-end: 1px solid var(--border);
 }
 .bulk-mode {
@@ -347,25 +348,26 @@ async function saveDefault() {
   display: flex;
   flex-wrap: wrap;
   gap: 0.75rem 1.5rem;
-  margin-block: 1rem 0;
+  margin-block: 0.6rem 0;
 }
 /* Surfaces the one thing this panel exists to fix, rather than burying it in a list. */
+/* A slim notice rather than a card: it is an aside, not a section of its own. */
 .bulk-hint {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
-  gap: 0.7rem 1.2rem;
-  margin-block-start: 1.1rem;
-  padding: 0.85rem 1rem;
+  gap: 0.5rem 1.2rem;
+  margin-block-start: 0.75rem;
+  padding: 0.55rem 0.85rem;
   border: 1px solid var(--border);
   border-inline-start: 2px solid var(--accent);
   border-radius: var(--radius-sm);
   background: rgb(255 255 255 / 0.03);
 }
-.bulk-hint-text { margin: 0; flex: 1 1 20rem; min-inline-size: 0; color: var(--text-secondary); font-size: 0.88rem; line-height: 1.7; }
+.bulk-hint-text { margin: 0; flex: 1 1 20rem; min-inline-size: 0; color: var(--text-secondary); font-size: 0.85rem; line-height: 1.55; }
 .bulk-hint-text strong { color: var(--accent); font-variant-numeric: tabular-nums; }
-.bulk-hint-action { flex: none; min-block-size: 40px; font-size: 0.85rem; }
+.bulk-hint-action { flex: none; min-block-size: 34px; padding-inline: 0.7rem; font-size: 0.82rem; }
 .bulk-check {
   display: inline-flex;
   align-items: center;

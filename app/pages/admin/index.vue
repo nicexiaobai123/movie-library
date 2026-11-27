@@ -327,10 +327,12 @@ onBeforeUnmount(() => {
   flex-direction: column;
   /* Row gap is the simplest way to keep breathing room between the page bands; the
      panels themselves stay flush so their internal padding is not doubled. */
-  gap: clamp(1.1rem, 2.2vw, 1.6rem);
+  gap: 0.9rem;
   flex: 1 1 auto;
   min-block-size: 0;
 }
+/* The tab strip belongs to the heading, so it sits closer to it than to the panel. */
+.admin-page > .admin-tabs { margin-block-end: 0.15rem; }
 .admin-page > #admin-panel-files {
   display: flex;
   flex-direction: column;
