@@ -201,6 +201,34 @@ export interface FavoriteList {
   items: LibraryCard[]
 }
 
+// One resumable position. `episodeId` is null for a whole film.
+export interface PlaybackProgress {
+  titleId: string
+  episodeId: string | null
+  position: number
+  duration: number
+}
+
+// One resumable position, keyed by the card's own id (titleId is implicit in `id`).
+export interface ContinueWatchingItem extends LibraryCard {
+  episodeId: string | null
+  episodeLabel: string | null
+  position: number
+  duration: number
+  percent: number
+}
+
+export interface ContinueWatching {
+  items: ContinueWatchingItem[]
+}
+
+export interface ProgressInput {
+  titleId: string
+  episodeId: string | null
+  position: number
+  duration: number
+}
+
 // Everything an administrator may change on a title, shared by PATCH and bulk.
 export interface MediaEdit {
   titleId: string | null

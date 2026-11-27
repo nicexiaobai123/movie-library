@@ -167,9 +167,14 @@ const meta = computed(() => {
 .hero-dot-btn.is-active { inline-size: 40px; background: var(--accent); }
 
 @media (max-width: 48rem) {
-  .hero { min-block-size: 82svh; padding-block-end: 3.5rem; }
+  /* A phone screen should reveal the first rail, not spend itself on one title. */
+  .hero { min-block-size: 62svh; padding-block-end: 2.6rem; }
   .hero-content { margin-inline-start: auto; padding-inline-start: var(--shell-pad); max-inline-size: none; }
-  .hero-dots { inset-inline-end: auto; inset-inline-start: var(--shell-pad); inset-block-end: 1.75rem; }
+  .hero-title { font-size: clamp(1.7rem, 8vw, 2.4rem); }
+  .hero-eyebrow { margin-block-end: 0.55rem; }
+  .hero-meta { margin-block-start: 0.7rem; }
+  .hero-actions { margin-block-start: 1.1rem; }
+  .hero-dots { inset-inline-end: auto; inset-inline-start: var(--shell-pad); inset-block-end: 1.1rem; }
   .hero-scrim {
     background:
       linear-gradient(0deg, var(--bg) 4%, rgb(8 9 11 / 0.82) 34%, rgb(8 9 11 / 0.15) 70%, rgb(8 9 11 / 0.5) 100%);

@@ -5,13 +5,17 @@ import { useUserSession } from '~/composables/useUser'
 useSeoMeta({ title: '我的账户 · 夜灯', robots: 'noindex, nofollow' })
 
 const route = useRoute()
-const { username, signedIn, login, register, logout } = await useUserSession()
-const next = computed(() => typeof route.query.next === 'string' ? route.query.next : '/favorites')
+const { username, signedIn, login, register, logout, refresh } = await useUserSession()
+const next = computed(() => typeof route.query.next === 'string' ? route.query.next : '/my-list')
 const mode = ref<'login' | 'register'>('login')
 const name = ref('')
 const password = ref('')
 const submitting = ref(false)
 const errorMessage = ref('')
+const changing = ref(false)
+const changeMessage = ref('')
+const currentPassword = ref('')
+const newPassword = ref('')
 let disposed = false
 
 onBeforeUnmount(() => { disposed = true })
@@ -58,6 +62,33 @@ function switchMode(value: 'login' | 'register') {
   mode.value = value
   errorMessage.value = ''
 }
+
+// Changing the password signs every session out, including this one.
+async function changePassword() {
+  if (changing.value) return
+  changeMessage.value = ''
+  errorMessage.value = ''
+  if (newPassword.value.length < 6) {
+    errorMessage.value = '新密码至少 6 位。'
+    return
+  }
+  changing.value = true
+  try {
+    await $fetch('/api/user/password', {
+      method: 'PUT',
+      body: { currentPassword: currentPassword.value, newPassword: newPassword.value },
+    })
+    currentPassword.value = ''
+    newPassword.value = ''
+    changeMessage.value = '密码已更新，请用新密码重新登录。'
+    await refresh()
+  } catch (error) {
+    if (disposed) return
+    errorMessage.value = adminErrorMessage(error, '未能修改密码，请检查当前密码后重试。')
+  } finally {
+    if (!disposed) changing.value = false
+  }
+}
 </script>
 
 <template>
@@ -80,6 +111,41 @@ function switchMode(value: 'login' | 'register') {
         </button>
       </div>
       <p v-if="errorMessage" class="user-error" role="alert">{{ errorMessage }}</p>
+
+      <form class="user-form change-password" aria-labelledby="user-password-title" @submit.prevent="changePassword">
+        <h3 id="user-password-title">修改密码</h3>
+        <div class="user-field">
+          <label for="user-current-password">当前密码</label>
+          <input
+            id="user-current-password"
+            v-model="currentPassword"
+            class="field"
+            type="password"
+            autocomplete="current-password"
+            required
+            :readonly="changing"
+            data-test="user-current-password"
+          >
+        </div>
+        <div class="user-field">
+          <label for="user-new-password">新密码</label>
+          <input
+            id="user-new-password"
+            v-model="newPassword"
+            class="field"
+            type="password"
+            autocomplete="new-password"
+            required
+            :readonly="changing"
+            data-test="user-new-password"
+          >
+          <p class="user-hint">至少 6 位。修改后其他设备上的登录会失效。</p>
+        </div>
+        <p v-if="changeMessage" class="user-notice" role="status" data-test="user-password-status">{{ changeMessage }}</p>
+        <button class="btn user-submit" type="submit" :disabled="changing" data-test="user-password-submit">
+          {{ changing ? '正在修改…' : '修改密码' }}
+        </button>
+      </form>
     </section>
 
     <section v-else class="user-card" aria-labelledby="user-form-title">
@@ -191,4 +257,7 @@ function switchMode(value: 'login' | 'register') {
 .user-error { margin: 0; color: var(--danger); font-size: .9rem; overflow-wrap: anywhere; }
 .user-submit { min-height: 3rem; font-size: .95rem; }
 .user-actions { display: flex; flex-wrap: wrap; gap: .6rem; margin-block-start: 1.1rem; }
+.change-password { margin-block-start: 1.8rem; padding-block-start: 1.4rem; border-block-start: 1px solid var(--border); }
+.change-password h3 { margin: 0 0 .2rem; font-family: var(--font-display); font-size: 1rem; font-weight: 600; }
+.user-notice { margin: 0; color: var(--accent); font-size: .88rem; }
 </style>

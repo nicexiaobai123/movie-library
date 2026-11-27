@@ -7,6 +7,7 @@ useSeoMeta({ title: '搜索 · 夜灯', robots: 'noindex, nofollow' })
 const route = useRoute()
 const router = useRouter()
 const query = computed(() => typeof route.query.q === 'string' ? route.query.q.trim() : '')
+const page = computed(() => Math.max(1, Number(typeof route.query.page === 'string' ? route.query.page : '') || 1))
 const draft = ref(query.value)
 watch(query, (value) => { draft.value = value })
 
@@ -16,6 +17,7 @@ function onInput() {
   if (timer !== undefined) clearTimeout(timer)
   timer = setTimeout(() => {
     const value = draft.value.trim()
+    // A new keyword starts again from the first page.
     void router.replace({ path: '/search', query: value ? { q: value } : {} })
   }, 280)
 }
@@ -26,12 +28,22 @@ function submit() {
 }
 onBeforeUnmount(() => { if (timer !== undefined) clearTimeout(timer) })
 
+const pageSize = 24
 const { data, status } = await useFetch<BrowseResult>('/api/library/browse', {
-  query: computed(() => ({ q: query.value || undefined, pageSize: 24 })),
+  query: computed(() => ({ q: query.value || undefined, page: page.value, pageSize })),
   deep: false,
 })
 const items = computed(() => data.value?.items ?? [])
 const total = computed(() => data.value?.total ?? 0)
+const pages = computed(() => Math.max(1, Math.ceil(total.value / pageSize)))
+
+function goToPage(next: number) {
+  if (next < 1 || next > pages.value) return
+  void router.replace({
+    path: '/search',
+    query: next === 1 ? { q: query.value } : { q: query.value, page: String(next) },
+  })
+}
 </script>
 
 <template>
@@ -80,11 +92,18 @@ const total = computed(() => data.value?.total ?? 0)
         <p>换一个关键词，或者去电影、剧集页面浏览。</p>
         <NuxtLink to="/browse?kind=movie" class="btn">浏览电影</NuxtLink>
       </div>
-      <ul v-else class="search-grid" role="list">
-        <li v-for="item in items" :key="item.id">
-          <MovieCard :item="item" />
-        </li>
-      </ul>
+      <template v-else>
+        <ul class="search-grid" role="list">
+          <li v-for="item in items" :key="item.id">
+            <MovieCard :item="item" />
+          </li>
+        </ul>
+        <nav v-if="pages > 1" class="pager" aria-label="搜索结果翻页" data-test="search-pager">
+          <button class="btn btn--ghost" type="button" :disabled="page <= 1" data-test="search-prev" @click="goToPage(page - 1)">上一页</button>
+          <span class="pager-info">第 {{ page }} / {{ pages }} 页</span>
+          <button class="btn btn--ghost" type="button" :disabled="page >= pages" data-test="search-next" @click="goToPage(page + 1)">下一页</button>
+        </nav>
+      </template>
     </div>
   </div>
 </template>
@@ -127,6 +146,8 @@ const total = computed(() => data.value?.total ?? 0)
 @keyframes shimmer { to { background-position: -220% 0; } }
 .search-empty { display: grid; justify-items: start; gap: 0.9rem; padding-block: 3rem; color: var(--text-secondary); }
 .search-empty h1 { font-size: clamp(1.3rem, 2.6vw, 1.9rem); color: var(--text); }
+.pager { display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 1rem; padding-block-start: 2.2rem; }
+.pager-info { color: var(--text-muted); font-size: 0.82rem; font-variant-numeric: tabular-nums; }
 @media (max-width: 34rem) {
   .search-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }

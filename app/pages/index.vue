@@ -3,6 +3,9 @@ import type { HomeData } from '#shared/types/library'
 import HeroBanner from '~/components/public/HeroBanner.vue'
 import MovieRail from '~/components/public/MovieRail.vue'
 import EmptyHero from '~/components/public/EmptyHero.vue'
+import ContinueWatching from '~/components/public/ContinueWatching.vue'
+import { useContinueWatching } from '~/composables/useProgress'
+import { useUserSession } from '~/composables/useUser'
 
 useSeoMeta({
   title: '夜灯 · 私人影视库',
@@ -14,6 +17,11 @@ const home = computed(() => data.value)
 const rails = computed(() => home.value?.rails ?? [])
 const heroes = computed(() => home.value?.heroes ?? [])
 const empty = computed(() => status.value === 'success' && !rails.value.length)
+
+// Resume points only exist for signed-in visitors, so the row stays hidden otherwise.
+const { signedIn } = await useUserSession()
+const { items: resumeItems } = await useContinueWatching()
+const resumable = computed(() => signedIn.value ? resumeItems.value : [])
 </script>
 
 <template>
@@ -40,6 +48,7 @@ const empty = computed(() => status.value === 'success' && !rails.value.length)
     </div>
 
     <template v-else>
+      <ContinueWatching v-if="resumable.length" :items="resumable" />
       <MovieRail
         v-for="(rail, index) in rails"
         :key="rail.id"

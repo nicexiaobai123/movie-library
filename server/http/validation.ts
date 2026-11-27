@@ -52,8 +52,7 @@ const userCredentials = z.object({
   username: z.string().trim().min(1).max(64),
   password: z.string().min(1).max(256),
 })
-const browseForm = z.object({
-  q: text(200).optional(),
+const browseForm = z.object({  q: text(200).optional(),
   kind: slug.optional(),
   genre: text(40).optional(),
   region: text(40).optional(),
@@ -79,6 +78,31 @@ function optionalNumber(value: unknown, name: string): number | undefined {
   const number = Number(value)
   if (!Number.isFinite(number)) throw new LibraryError(400, `筛选参数 ${name} 无效。`)
   return number
+}
+
+const progressForm = z.object({
+  titleId: z.uuidv4(),
+  episodeId: z.uuidv4().nullable().default(null),
+  // Seconds; a day is plenty for any single file.
+  position: z.number().min(0).max(86_400 * 7),
+  duration: z.number().positive().max(86_400 * 7),
+})
+
+const passwordChange = z.object({
+  currentPassword: z.string().min(1).max(256),
+  newPassword: z.string().min(1).max(256),
+})
+
+export function parsePasswordChange(input: unknown) {
+  const result = passwordChange.safeParse(input)
+  if (!result.success) throw new LibraryError(400, '请输入当前密码和新密码。')
+  return result.data
+}
+
+export function parseProgress(input: unknown) {
+  const result = progressForm.safeParse(input)
+  if (!result.success) throw new LibraryError(422, '播放进度无效。')
+  return result.data
 }
 
 export function parseBrowseQuery(input: Record<string, unknown>): BrowseQuery {

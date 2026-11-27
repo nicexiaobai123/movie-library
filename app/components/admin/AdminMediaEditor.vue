@@ -103,11 +103,18 @@ const posterProgress = ref(0)
 const posterError = ref('')
 const posterStatus = ref('')
 const posterPreview = computed(() => selectedTitle.value?.posterPath === draft.posterPath ? selectedTitle.value?.posterUrl : null)
+// A backdrop is served from the same endpoint with a variant flag; preview only
+// when the saved value matches what is in the field, so unsaved text is not shown.
+const backdropPreview = computed(() => selectedTitle.value?.backdropPath === draft.backdropPath
+  ? `/api/posters/${encodeURIComponent(selectedTitle.value?.id ?? '')}?variant=backdrop`
+  : null)
 const previewFailed = ref(false)
+const backdropPreviewFailed = ref(false)
 let posterTransfer: AdminFileTransfer<{ path: string }> | null = null
 let disposed = false
 
 watch(posterPreview, () => { previewFailed.value = false })
+watch(backdropPreview, () => { backdropPreviewFailed.value = false })
 watch(replaceKey, () => {
   if (conflict.value) errorMessage.value = ''
   conflict.value = null
@@ -450,6 +457,31 @@ onBeforeUnmount(() => {
           </div>
         </section>
 
+        <section class="editor-subgroup" aria-labelledby="admin-backdrop-title">
+          <h5 id="admin-backdrop-title">背景图</h5>
+          <figure v-if="backdropPreview && !backdropPreviewFailed" class="backdrop-preview">
+            <img :key="backdropPreview" :src="backdropPreview" alt="" width="160" height="90" loading="lazy" @error="backdropPreviewFailed = true">
+            <figcaption class="editor-hint">当前背景图</figcaption>
+          </figure>
+          <div class="editor-field">
+            <label for="admin-media-backdrop-path">背景图相对路径 <span>（可选）</span></label>
+            <input
+              id="admin-media-backdrop-path"
+              v-model="draft.backdropPath"
+              class="field"
+              type="text"
+              maxlength="2048"
+              placeholder="例如：海报/片名-横版.webp"
+              aria-describedby="admin-backdrop-help"
+              spellcheck="false"
+              data-test="admin-media-backdrop-path"
+            >
+            <p id="admin-backdrop-help" class="editor-hint">
+              用于详情页顶部和首页推荐位的横向剧照，建议 16:9。使用正斜杠（/）分隔目录，留空则回退使用海报。
+            </p>
+          </div>
+        </section>
+
         <p v-if="errorMessage" class="editor-error" role="alert" data-test="admin-media-error">{{ errorMessage }}</p>
         <div v-if="activeConflict" class="conflict-panel" data-test="admin-media-conflict">
           <h5 ref="conflictHeading" tabindex="-1">{{ draft.kind === 'series' ? '这一集已有文件' : '这部电影已有文件' }}</h5>
@@ -525,6 +557,8 @@ onBeforeUnmount(() => {
 .editor-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 0.65rem; }
 .poster-preview { display: flex; align-items: center; gap: 0.75rem; margin: 0; }
 .poster-preview img { object-fit: cover; border-radius: var(--radius-sm); background: var(--bg-card); }
+.backdrop-preview { display: flex; align-items: center; gap: 0.75rem; margin: 0 0 0.4rem; }
+.backdrop-preview img { object-fit: cover; inline-size: 10rem; block-size: auto; border-radius: var(--radius-sm); background: var(--bg-card); }
 .poster-choose { justify-self: start; cursor: pointer; }
 .editor-field input:focus-visible + .poster-choose {
   outline: 2px solid var(--accent);

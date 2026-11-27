@@ -183,10 +183,11 @@ function clearAll() {
         <div v-else-if="!result?.items.length" class="state">
           <h2>没有符合条件的{{ isSeries ? '剧集' : (filters.kind === 'movie' ? '电影' : '作品') }}</h2>
           <p v-if="activeCount">试着放宽筛选条件。</p>
-          <p v-else-if="isSeries">还没有入库任何剧集。带集号的文件上传或扫描后会自动成为剧集。</p>
+          <p v-else-if="isSeries">还没有入库任何剧集。文件名带集号（如「潮声来处 S01E02.mp4」或「潮声来处 第02集.mp4」）的视频，上传或扫描后会自动成为同一部剧。</p>
           <p v-else>片库还是空的，可以先到管理后台上传或扫描影片。</p>
           <button v-if="activeCount" class="btn" type="button" @click="clearAll">清除筛选</button>
           <NuxtLink v-else-if="!filters.kind" to="/browse?kind=movie" class="btn">去看电影</NuxtLink>
+          <NuxtLink v-else to="/admin" class="btn">进入管理后台上传</NuxtLink>
         </div>
         <template v-else>
           <ul class="grid" role="list">

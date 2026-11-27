@@ -98,7 +98,7 @@ export function createCatalog(store: LibraryStore, config: LibraryConfig) {
     }
   }
 
-  async function openPoster(relative: string): Promise<{ file: FileHandle; size: number; mime: string }> {
+  async function openPoster(relative: string): Promise<{ file: FileHandle; size: number; mtime: number; mime: string }> {
     if (!posterMime(relative)) throw new LibraryError(404, '未找到海报。')
     const root = await resolveMediaRoot(config.mediaRoot)
     const verified = await openMediaFile(root, relative)
@@ -106,7 +106,7 @@ export function createCatalog(store: LibraryStore, config: LibraryConfig) {
       if (verified.stamp.size > imageLimit) throw new LibraryError(404, '海报超过大小限制。')
       const mime = await verifyPoster(verified.file, relative)
       if (!mime) throw new LibraryError(404, '海报无效。')
-      return { file: verified.file, size: verified.stamp.size, mime }
+      return { file: verified.file, size: verified.stamp.size, mtime: verified.stamp.mtime, mime }
     } catch (error) {
       await verified.file.close().catch(() => {})
       throw error

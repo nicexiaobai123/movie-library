@@ -127,4 +127,21 @@ export const migrations = [
       CREATE INDEX idx_titles_created ON titles(created_at DESC);
     `,
   },
+  {
+    version: 5,
+    sql: `
+      CREATE TABLE playback_progress (
+        user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        title_id TEXT NOT NULL REFERENCES titles(id) ON DELETE CASCADE,
+        -- '' means a whole film; an episode id otherwise. SQLite treats NULLs as
+        -- distinct in a primary key, so a sentinel keeps one row per slot.
+        episode_id TEXT NOT NULL DEFAULT '',
+        position REAL NOT NULL,
+        duration REAL NOT NULL,
+        updated_at TEXT NOT NULL,
+        PRIMARY KEY (user_id, title_id, episode_id)
+      ) STRICT;
+      CREATE INDEX idx_progress_recent ON playback_progress(user_id, updated_at DESC);
+    `,
+  },
 ] as const

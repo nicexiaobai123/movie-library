@@ -73,6 +73,19 @@ export function createUserAuth(users: UserStore) {
         verifying--
       }
     },
+    // Changing a password ends every other session so a leaked cookie stops working.
+    async changePassword(user: UserRecord, current: string, next: string, ip: string) {
+      if (!validPassword(next)) throw new LibraryError(422, '新密码至少 6 位。')
+      const reset = limit(ip)
+      verifying++
+      try {
+        if (!await verifyPassword(current, user.password_hash)) throw new LibraryError(403, '当前密码不正确。')
+        reset()
+        users.setPassword(user.id, await hashPassword(next))
+      } finally {
+        verifying--
+      }
+    },
   }
 }
 

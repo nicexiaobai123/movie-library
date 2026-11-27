@@ -7,6 +7,7 @@ import type { LibraryConfigInput } from '../domain/config.ts'
 import { createAuth } from './auth.ts'
 import { createCatalog } from './catalog.ts'
 import { createFavorites } from './favorites.ts'
+import { createProgress } from './progress.ts'
 import { createUserAuth } from './user-auth.ts'
 
 function createRuntime(input: LibraryConfigInput) {
@@ -20,6 +21,7 @@ function createRuntime(input: LibraryConfigInput) {
     config, db, catalog, auth, users,
     userAuth: createUserAuth(users),
     favorites: createFavorites(users, library),
+    progress: createProgress(users, library),
   }
 }
 

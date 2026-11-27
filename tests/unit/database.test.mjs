@@ -26,7 +26,7 @@ async function database(t) {
 
 test('migration version persists on reopen and repeat indexing keeps IDs and edited title', async (t) => {
   const { db, name } = await database(t)
-  assert.equal(db.prepare('PRAGMA user_version').get().user_version, 4)
+  assert.equal(db.prepare('PRAGMA user_version').get().user_version, 5)
   const store = libraryStore(db)
   // Settings survive a reopen and default to an empty value when never written.
   assert.equal(store.setting('default_description'), null)

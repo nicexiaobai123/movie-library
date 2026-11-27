@@ -4,6 +4,8 @@ import EpisodeList from '~/components/public/EpisodeList.vue'
 import MovieCard from '~/components/public/MovieCard.vue'
 import PublicIcon from '~/components/public/Icon.vue'
 import LibraryState from '~/components/public/LibraryState.vue'
+import { recordPlaybackProgress, useContinueWatching } from '~/composables/useProgress'
+import { useUserSession } from '~/composables/useUser'
 
 const route = useRoute()
 const titleId = computed(() => String(route.params.id ?? ''))
@@ -81,6 +83,83 @@ const fillScreen = ref(false)
 // Focus rings are for Tab navigation only; playback keys and clicks must not
 // leave a highlight frame around the picture.
 const tabFocus = ref(false)
+
+// Resume bookkeeping: positions are written at most every few seconds, and the
+// stored value is applied once when this exact video first loads.
+const { signedIn } = await useUserSession()
+const { items: resumeItems, refresh: refreshResume } = await useContinueWatching()
+const resumePosition = computed(() => {
+  const item = resumeItems.value.find(entry => entry.id === titleId.value
+    && (entry.episodeId ?? null) === (activeEpisode.value?.id ?? null))
+  return item && item.percent > 0 && item.percent < 97 ? item.position : 0
+})
+const resumeApplied = ref(false)
+const resumeNotice = ref('')
+let lastReported = 0
+let reportTimer: ReturnType<typeof setTimeout> | undefined
+
+// Playback speed is a viewer preference, so it is remembered across films.
+const playbackRates = [0.75, 1, 1.25, 1.5, 2] as const
+const rateStorageKey = 'night-library:playback-rate'
+const playbackRate = ref(1)
+
+function readStoredRate(): number {
+  if (typeof localStorage === 'undefined') return 1
+  const stored = Number(localStorage.getItem(rateStorageKey))
+  return (playbackRates as readonly number[]).includes(stored) ? stored : 1
+}
+
+function setPlaybackRate(value: string) {
+  const rate = Number(value)
+  if (!(playbackRates as readonly number[]).includes(rate)) return
+  playbackRate.value = rate
+  if (player.value) player.value.playbackRate = rate
+  try { localStorage.setItem(rateStorageKey, String(rate)) } catch { /* private mode */ }
+}
+
+// A newly created <video> element starts at 1x, so the choice is re-applied.
+function applyPlaybackRate() {
+  if (player.value) player.value.playbackRate = playbackRate.value
+}
+
+function currentPositionInput() {
+  const element = player.value
+  if (!element || !Number.isFinite(element.duration) || element.duration <= 0) return null
+  return {
+    titleId: titleId.value,
+    episodeId: activeEpisode.value?.id ?? null,
+    position: element.currentTime,
+    duration: element.duration,
+  }
+}
+
+function reportProgress(force = false) {
+  if (!signedIn.value) return
+  const input = currentPositionInput()
+  if (!input) return
+  // Skip redundant writes while paused at the same spot.
+  if (!force && Math.abs(input.position - lastReported) < 5) return
+  lastReported = input.position
+  void recordPlaybackProgress(input)
+}
+
+function scheduleReport() {
+  if (reportTimer !== undefined) return
+  reportTimer = setTimeout(() => {
+    reportTimer = undefined
+    reportProgress()
+  }, 10_000)
+}
+
+function applyResumePoint() {  const element = player.value
+  if (resumeApplied.value || !element || resumePosition.value <= 0) return
+  if (!Number.isFinite(element.duration) || element.duration <= 0) return
+  if (resumePosition.value >= element.duration - 1) return
+  element.currentTime = resumePosition.value
+  resumeApplied.value = true
+  resumeNotice.value = `已从上次 ${clockTime(resumePosition.value)} 继续播放`
+  setTimeout(() => { resumeNotice.value = '' }, 4000)
+}
 
 function reportPlaybackError() {
   if (player.value?.error?.code === 2) {
@@ -188,11 +267,29 @@ watch(player, (element) => {
 onMounted(() => {
   window.addEventListener('keydown', handlePlayerKey, true)
   document.addEventListener('fullscreenchange', syncFullscreen)
+  // Leaving mid-film should keep the position; `pagehide` fires on tab close too.
+  window.addEventListener('pagehide', flushProgress)
+  playbackRate.value = readStoredRate()
+  applyPlaybackRate()
 })
 onBeforeUnmount(() => {
   window.removeEventListener('keydown', handlePlayerKey, true)
   document.removeEventListener('fullscreenchange', syncFullscreen)
+  window.removeEventListener('pagehide', flushProgress)
+  flushProgress()
   if (noticeTimer !== undefined) clearTimeout(noticeTimer)
+  if (reportTimer !== undefined) clearTimeout(reportTimer)
+})
+
+function flushProgress() {
+  if (!signedIn.value) return
+  reportProgress(true)
+}
+
+// A new episode or film resets the resume bookkeeping for the next video.
+watch(videoKey, () => {
+  resumeApplied.value = false
+  lastReported = 0
 })
 
 </script>
@@ -253,12 +350,16 @@ onBeforeUnmount(() => {
             playsinline
             preload="metadata"
             @error="reportPlaybackError"
-            @loadedmetadata="playbackError = ''"
+            @loadedmetadata="playbackError = ''; applyResumePoint(); applyPlaybackRate()"
+            @timeupdate="scheduleReport"
+            @pause="reportProgress(true)"
+            @ended="reportProgress(true)"
             @dblclick="toggleFullscreen"
           >
             当前浏览器不支持网页视频。<a :href="downloadUrl" download>下载原文件</a>后可用本地播放器观看。
           </video>
           <p v-if="seekNotice" class="watch-seek" aria-hidden="true">{{ seekNotice }}</p>
+          <p v-else-if="resumeNotice" class="watch-seek" role="status" data-test="resume-notice">{{ resumeNotice }}</p>
           <div v-if="isFullscreen" class="watch-overlay">
             <button
               class="watch-overlay-button"
@@ -290,6 +391,17 @@ onBeforeUnmount(() => {
           </div>
           <div class="watch-actions">
             <button v-if="playbackError" type="button" class="btn watch-action" @click="reloadVideo">重新载入</button>
+            <label class="watch-speed">
+              <span class="visually-hidden">播放速度</span>
+              <select
+                class="field"
+                :value="String(playbackRate)"
+                data-test="watch-speed"
+                @change="setPlaybackRate(($event.target as HTMLSelectElement).value)"
+              >
+                <option v-for="rate in playbackRates" :key="rate" :value="String(rate)">{{ rate }}×</option>
+              </select>
+            </label>
             <button
               type="button"
               class="btn watch-action"
@@ -476,6 +588,7 @@ onBeforeUnmount(() => {
 .watch-keys kbd { min-inline-size: 1.45rem; padding: 0.05rem 0.32rem; border: 1px solid var(--border-strong); border-radius: var(--radius-xs); background: var(--bg-card); color: var(--text-secondary); font-family: var(--font-sans); font-size: 0.74rem; text-align: center; }
 .watch-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem; margin-inline-start: auto; }
 .watch-action { min-block-size: 42px; padding-inline: 0.95rem; font-size: 0.84rem; white-space: nowrap; }
+.watch-speed .field { min-block-size: 42px; padding-block: 0; font-size: 0.84rem; font-variant-numeric: tabular-nums; }
 .watch-action :deep(svg) { inline-size: 1rem; block-size: 1rem; }
 .watch-file-size { padding-inline-start: 0.5rem; border-inline-start: 1px solid var(--border-strong); color: var(--text-muted); font-size: 0.74rem; font-variant-numeric: tabular-nums; }
 .watch-episodes { margin-block-start: clamp(1.8rem, 4vw, 3rem); scroll-margin-block-start: calc(var(--header-h) + 1rem); }

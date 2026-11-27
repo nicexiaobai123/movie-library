@@ -75,10 +75,22 @@ export async function sendVideo(event: H3Event, runtime: LibraryRuntime, attachm
 export async function sendPoster(event: H3Event, runtime: LibraryRuntime, id = routeId(event), variant: 'poster' | 'backdrop' = 'poster'): Promise<void> {
   checkReadMethod(event)
   const poster = await runtime.catalog.poster(id, variant)
+  // The validator follows the file, so a replaced cover invalidates it naturally
+  // while an unchanged one costs only a 304 on every later request.
+  const etag = `"poster-${variant}-${id}-${poster.mtime}-${poster.size}"`
+  const modified = new Date(poster.mtime).toUTCString()
+  setHeader(event, 'ETag', etag)
+  setHeader(event, 'Last-Modified', modified)
+  setHeader(event, 'Cache-Control', 'private, no-cache')
+  const ifNoneMatch = getHeader(event, 'if-none-match')
+  if (ifNoneMatch === etag) {
+    await poster.file.close()
+    setResponseStatus(event, 304)
+    event.node.res.end()
+    return
+  }
   setHeader(event, 'Content-Type', poster.mime)
   setHeader(event, 'Content-Length', poster.size)
-  // Validate even after a cover is replaced or the storage path changes.
-  setHeader(event, 'Cache-Control', 'no-cache')
   if (event.method === 'HEAD') {
     await poster.file.close()
     event.node.res.end()

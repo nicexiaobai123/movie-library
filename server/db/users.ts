@@ -23,6 +23,7 @@ export function userStore(db: DatabaseSync) {
     byId: db.prepare('SELECT * FROM users WHERE id = ?'),
     insert: db.prepare('INSERT INTO users (id, username, password_hash, created_at) VALUES (?, ?, ?, ?)'),
     purgeSessionsByName: db.prepare('DELETE FROM user_sessions WHERE user_id = ?'),
+    setPassword: db.prepare('UPDATE users SET password_hash = ? WHERE id = ?'),
     session: db.prepare(`SELECT u.* FROM user_sessions s JOIN users u ON u.id = s.user_id
       WHERE s.token_hash = ? AND s.expires_at > ?`),
     addSession: db.prepare('INSERT INTO user_sessions (token_hash, user_id, expires_at) VALUES (?, ?, ?)'),
@@ -35,8 +36,25 @@ export function userStore(db: DatabaseSync) {
     hasFavorite: db.prepare('SELECT 1 AS hit FROM favorites WHERE user_id = ? AND title_id = ?'),
     catalog: db.prepare(`SELECT t.* FROM favorites f JOIN titles t ON t.id = f.title_id
       WHERE f.user_id = ? AND EXISTS (SELECT 1 FROM media_files m WHERE m.title_id = t.id AND m.state = 'published')
-      ORDER BY f.created_at DESC`),    available: db.prepare(`SELECT EXISTS (SELECT 1 FROM media_files p WHERE p.title_id = ?
+      ORDER BY f.created_at DESC`),
+    available: db.prepare(`SELECT EXISTS (SELECT 1 FROM media_files p WHERE p.title_id = ?
       AND p.state = 'published' AND p.available = 1) AS available`),
+    saveProgress: db.prepare(`INSERT INTO playback_progress (user_id, title_id, episode_id, position, duration, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?)
+      ON CONFLICT (user_id, title_id, episode_id) DO UPDATE SET
+        position = excluded.position, duration = excluded.duration, updated_at = excluded.updated_at`),
+    clearProgress: db.prepare('DELETE FROM playback_progress WHERE user_id = ? AND title_id = ? AND episode_id = ?'),
+    clearTitleProgress: db.prepare('DELETE FROM playback_progress WHERE user_id = ? AND title_id = ?'),
+    // Only rows whose title is still published and playable are worth resuming.
+    recentProgress: db.prepare(`SELECT p.title_id, p.episode_id, p.position, p.duration, p.updated_at,
+        t.title, t.kind, t.poster_path, t.backdrop_path, t.year, t.original_title, t.genres, t.rating, t.created_at,
+        e.season AS episode_season, e.episode AS episode_number, e.title AS episode_title
+      FROM playback_progress p
+      JOIN titles t ON t.id = p.title_id
+      LEFT JOIN episodes e ON e.id = p.episode_id AND p.episode_id <> ''
+      WHERE p.user_id = ? AND EXISTS (
+        SELECT 1 FROM media_files m WHERE m.title_id = t.id AND m.state = 'published' AND m.available = 1)
+      ORDER BY p.updated_at DESC LIMIT ?`),
   }
 
   return {
@@ -57,6 +75,13 @@ export function userStore(db: DatabaseSync) {
     session: (tokenHash: string, now: number) => sql.session.get(tokenHash, now) as unknown as UserRecord | undefined,
     addSession: (tokenHash: string, userId: string, expiresAt: number) => { sql.addSession.run(tokenHash, userId, expiresAt) },
     removeSession: (tokenHash: string) => { sql.removeSession.run(tokenHash) },
+    // A password change invalidates every session for that account.
+    setPassword(userId: string, passwordHash: string) {
+      transaction(db, () => {
+        sql.setPassword.run(passwordHash, userId)
+        sql.purgeSessionsByName.run(userId)
+      })
+    },
     expireSessions: (now: number) => { sql.expireSessions.run(now) },
     addFavorite: (userId: string, titleId: string) => {
       sql.addFavorite.run(userId, titleId, new Date().toISOString())
@@ -76,7 +101,36 @@ export function userStore(db: DatabaseSync) {
       rating: row.rating, genres: parseList(row.genres), addedAt: row.created_at,
       available: Boolean((sql.available.get(row.id) as unknown as { available: 0 | 1 }).available),
     })),
+    // Saving a finished title clears its progress instead of leaving a 100% row.
+    saveProgress(userId: string, titleId: string, episodeId: string, position: number, duration: number) {
+      sql.saveProgress.run(userId, titleId, episodeId, position, duration, new Date().toISOString())
+    },
+    clearProgress: (userId: string, titleId: string, episodeId: string) => {
+      sql.clearProgress.run(userId, titleId, episodeId)
+    },
+    clearTitleProgress: (userId: string, titleId: string) => { sql.clearTitleProgress.run(userId, titleId) },
+    recentProgress: (userId: string, limit: number): ProgressRow[] => sql.recentProgress.all(userId, limit) as unknown as ProgressRow[],
   }
+}
+
+export interface ProgressRow {
+  title_id: string
+  episode_id: string
+  position: number
+  duration: number
+  updated_at: string
+  title: string
+  kind: 'movie' | 'series'
+  poster_path: string | null
+  backdrop_path: string | null
+  year: number | null
+  original_title: string | null
+  genres: string
+  rating: number | null
+  created_at: string
+  episode_season: number | null
+  episode_number: number | null
+  episode_title: string | null
 }
 
 export type UserStore = ReturnType<typeof userStore>
