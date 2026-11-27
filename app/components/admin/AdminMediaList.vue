@@ -50,6 +50,32 @@ const rows = computed(() => props.items
   .filter(item => item.id === editingId.value || matchesFilter(item, filter.value))
   .map(item => ({ item, linked: linkedTitle(item) })))
 const pinned = computed(() => rows.value.some(({ item }) => !matchesFilter(item, filter.value)))
+
+// A large library would otherwise render hundreds of rows at once, so the list is
+// filtered by name and revealed in pages; the open editor is always kept visible.
+const pageSize = 40
+const query = ref('')
+const visibleCount = ref(pageSize)
+
+const searched = computed(() => {
+  const needle = query.value.trim().toLowerCase()
+  if (!needle) return rows.value
+  return rows.value.filter(({ item, linked }) =>
+    item.id === editingId.value
+    || item.fileName.toLowerCase().includes(needle)
+    || item.relativePath.toLowerCase().includes(needle)
+    || linked.toLowerCase().includes(needle))
+})
+const visibleRows = computed(() => {
+  const list = searched.value
+  if (list.length <= visibleCount.value) return list
+  const head = list.slice(0, visibleCount.value)
+  // Never hide the row being edited.
+  const editing = list.find(({ item }) => item.id === editingId.value)
+  return editing && !head.some(({ item }) => item.id === editingId.value) ? [...head, editing] : head
+})
+const hiddenCount = computed(() => Math.max(0, searched.value.length - visibleRows.value.length))
+watch([filter, query], () => { visibleCount.value = pageSize })
 const emptyMessage = computed(() => {
   if (counts.value.all === 0) return '片库还没有视频。可上传 MP4，或扫描磁盘中的媒体目录。'
   if (filter.value === 'pending') return '没有待整理的文件，可在「全部」中编辑已整理的文件。'
@@ -128,9 +154,21 @@ watch(() => props.items, (items) => {
       </div>
       <div id="admin-files-content">
         <p v-if="pinned" class="pinned-note" role="status">当前正在编辑的文件不符合筛选条件，仍会显示到编辑结束。</p>
-        <p v-if="!rows.length" class="files-empty" role="status" data-test="admin-library-empty">{{ emptyMessage }}</p>
+        <div v-if="counts.all > pageSize" class="files-search">
+          <label for="admin-files-query" class="visually-hidden">搜索文件</label>
+          <input
+            id="admin-files-query"
+            v-model="query"
+            class="field"
+            type="search"
+            autocomplete="off"
+            placeholder="按片名或文件名搜索…"
+            data-test="admin-files-query"
+          >
+        </div>
+        <p v-if="!searched.length" class="files-empty" role="status" data-test="admin-library-empty">{{ query.trim() ? `没有匹配「${query.trim()}」的文件。` : emptyMessage }}</p>
         <ul v-else class="file-list" role="list" aria-label="视频文件">
-          <li v-for="{ item, linked } in rows" :key="item.id" class="file-row" :data-media-id="item.id" data-test="admin-media-row">
+          <li v-for="{ item, linked } in visibleRows" :key="item.id" class="file-row" :data-media-id="item.id" data-test="admin-media-row">
             <div class="file-summary">
               <div class="file-copy">
                 <h3 class="file-name" data-test="admin-media-filename">{{ item.fileName }}</h3>
@@ -173,6 +211,11 @@ watch(() => props.items, (items) => {
             />
           </li>
         </ul>
+        <div v-if="hiddenCount" class="files-more">
+          <button class="btn btn--ghost" type="button" data-test="admin-files-more" @click="visibleCount += pageSize">
+            显示更多（还有 {{ hiddenCount }} 个）
+          </button>
+        </div>
       </div>
     </template>
   </section>
@@ -243,6 +286,9 @@ watch(() => props.items, (items) => {
   color: var(--color-danger, var(--accent-strong));
 }
 .files-empty { padding-block: 1.4rem; }
+.files-search { margin-block-end: 0.6rem; }
+.files-search input { inline-size: 100%; }
+.files-more { display: flex; justify-content: center; padding-block: 1.2rem 0; }
 .pinned-note { padding-block: 1rem 0; }
 .file-list {
   margin: 0;

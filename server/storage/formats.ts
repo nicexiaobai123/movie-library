@@ -30,6 +30,78 @@ export async function validMp4(file: FileHandle, size: number): Promise<boolean>
   return false
 }
 
+/**
+ * Reads the duration from the movie header (`moov/mvhd`) without decoding the
+ * video, so no FFmpeg is needed. Returns null when the box cannot be found.
+ */
+export async function readDuration(file: FileHandle, size: number): Promise<number | null> {
+  const header = Buffer.alloc(16)
+  let offset = 0
+  // Find `moov` among the top-level boxes first.
+  for (let i = 0; i < 128 && offset + 8 <= size; i++) {
+    if ((await file.read(header, 0, 8, offset)).bytesRead !== 8) return null
+    const type = header.toString('ascii', 4, 8)
+    let length = header.readUInt32BE(0)
+    let headerLength = 8
+    if (length === 1) {
+      if ((await file.read(header, 8, 8, offset + 8)).bytesRead !== 8) return null
+      const large = header.readBigUInt64BE(8)
+      if (large > BigInt(Number.MAX_SAFE_INTEGER)) return null
+      length = Number(large)
+      headerLength = 16
+    } else if (length === 0) length = size - offset
+    if (length < headerLength || offset + length > size) return null
+    if (type === 'moov') return readMvhd(file, offset + headerLength, length - headerLength)
+    offset += length
+  }
+  return null
+}
+
+// `mvhd` sits directly inside `moov` and holds timescale + duration.
+async function readMvhd(file: FileHandle, start: number, span: number): Promise<number | null> {
+  const header = Buffer.alloc(8)
+  let offset = start
+  const end = start + span
+  for (let i = 0; i < 64 && offset + 8 <= end; i++) {
+    if ((await file.read(header, 0, 8, offset)).bytesRead !== 8) return null
+    const type = header.toString('ascii', 4, 8)
+    let length = header.readUInt32BE(0)
+    let headerLength = 8
+    if (length === 1) {
+      const largeBuffer = Buffer.alloc(8)
+      if ((await file.read(largeBuffer, 0, 8, offset + 8)).bytesRead !== 8) return null
+      const large = largeBuffer.readBigUInt64BE(0)
+      if (large > BigInt(Number.MAX_SAFE_INTEGER)) return null
+      length = Number(large)
+      headerLength = 16
+    } else if (length === 0) length = end - offset
+    if (length < headerLength || offset + length > end) return null
+    if (type === 'mvhd') {
+      // version(1) + flags(3) then either 32-bit or 64-bit timescale/duration.
+      const body = Buffer.alloc(Math.min(length - headerLength, 32))
+      if ((await file.read(body, 0, body.length, offset + headerLength)).bytesRead < 20) return null
+      const version = body.readUInt8(0)
+      let timescale: number
+      let units: number
+      if (version === 1) {
+        if (body.length < 28) return null
+        timescale = body.readUInt32BE(20)
+        const high = body.readUInt32BE(24)
+        const low = body.length >= 32 ? body.readUInt32BE(28) : 0
+        units = high * 2 ** 32 + low
+      } else {
+        timescale = body.readUInt32BE(12)
+        units = body.readUInt32BE(16)
+      }
+      if (!timescale) return null
+      const seconds = units / timescale
+      return Number.isFinite(seconds) && seconds > 0 ? seconds : null
+    }
+    offset += length
+  }
+  return null
+}
+
 const images = new Map([['.jpg', 'image/jpeg'], ['.jpeg', 'image/jpeg'], ['.png', 'image/png'], ['.webp', 'image/webp']])
 export const posterMime = (path: string): string | undefined => images.get(extname(path).toLowerCase())
 

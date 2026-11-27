@@ -131,6 +131,8 @@ export function libraryStore(db: DatabaseSync) {
     editTitle: db.prepare(`UPDATE titles SET title = ?, year = ?, description = ?, poster_path = ?,
         original_title = ?, genres = ?, region = ?, rating = ?, runtime = ?, director = ?, cast_members = ?,
         backdrop_path = ? WHERE id = ?`),
+    // Only fills a blank runtime, so a value the administrator set is never lost.
+    fillRuntime: db.prepare('UPDATE titles SET runtime = ? WHERE id = ? AND runtime IS NULL'),
     visibleTitle: db.prepare(`SELECT t.* FROM titles t WHERE t.id = ? AND ${publishedExists}`),
     episode: db.prepare('SELECT * FROM episodes WHERE id = ?'),
     episodeAt: db.prepare('SELECT * FROM episodes WHERE title_id = ? AND season = ? AND episode = ?'),
@@ -266,6 +268,8 @@ export function libraryStore(db: DatabaseSync) {
   return {
     transact: <T>(work: () => T) => transaction(db, work),
     actors,
+    // Records a detected runtime without touching any other metadata.
+    fillRuntime: (titleId: string, minutes: number) => { sql.fillRuntime.run(minutes, titleId) },
     cards(q: string, kind: LibraryKind | null): LibraryCard[] {
       return allPublishedCards().filter(item =>
         (!kind || item.kind === kind) && item.title.toLowerCase().includes(q.toLowerCase()))

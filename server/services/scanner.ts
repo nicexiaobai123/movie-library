@@ -3,7 +3,7 @@ import type { ScanResult, ScanStatus } from '../../shared/types/library.ts'
 import type { LibraryStore } from '../db/library.ts'
 import type { LibraryConfig } from '../domain/config.ts'
 import { errorCode, LibraryError } from '../domain/errors.ts'
-import { validMp4 } from '../storage/formats.ts'
+import { readDuration, validMp4 } from '../storage/formats.ts'
 import { assertRootUnchanged, fileStamp, inspectMediaFile, inventory, isMissing, openMediaFile, resolveMediaRoot, sameStamp } from '../storage/paths.ts'
 import type { FoundFile, Stamp } from '../storage/paths.ts'
 import { sweepStaging } from '../storage/uploads.ts'
@@ -26,16 +26,27 @@ export function createScanner(store: LibraryStore, config: LibraryConfig, upload
       const files = await inventory(root)
       const now = performance.now()
       const nextSeen = new Map<string, Observation>()
-      const stable = new Map<string, { entry: FoundFile; valid: boolean }>()
+      const stable = new Map<string, { entry: FoundFile; valid: boolean; duration: number | null }>()
       const waiting = new Set<string>()
+      // Files whose title is missing a runtime, to be read without re-indexing.
+      const backfill = new Set<string>()
+      const durations = new Map<string, number>()
       for (const [key, entry] of files) {
         if (uploadInProgress.has(key)) continue
         const previous = seen.get(key)
         const since = previous && sameStamp(previous.stamp, entry.stamp) ? previous.since : now
         nextSeen.set(key, { since, stamp: entry.stamp })
         const indexed = snapshot.get(key)
-        if (indexed && indexed.relative_path === entry.relative && sameStamp(indexed, entry.stamp)
-          && (indexed.available || !indexed.valid_mp4)) continue
+        // An already-indexed, unchanged file normally needs no work. The exception
+        // is a title stored before durations were detected: read it once to fill in
+        // the runtime, without re-running the whole indexing flow.
+        const unchanged = indexed && indexed.relative_path === entry.relative && sameStamp(indexed, entry.stamp)
+        if (unchanged && (indexed.available || !indexed.valid_mp4)) {
+          if (indexed.valid_mp4 && indexed.title_id && store.title(indexed.title_id)?.runtime == null) {
+            backfill.add(key)
+          }
+          continue
+        }
         if (now - since < config.stableMs) {
           waiting.add(key)
           continue
@@ -44,6 +55,8 @@ export function createScanner(store: LibraryStore, config: LibraryConfig, upload
         try {
           verified = await openMediaFile(root, entry.relative)
           const valid = sameStamp(verified.stamp, entry.stamp) && await validMp4(verified.file, verified.stamp.size)
+          // Duration is read here, while the file is still open for validation.
+          const duration = valid ? await readDuration(verified.file, verified.stamp.size) : null
           const after = await inspectMediaFile(root, entry.relative)
           if (!sameStamp(verified.stamp, entry.stamp) || !sameStamp(after, entry.stamp)
             || !sameStamp(fileStamp(await verified.file.stat()), entry.stamp)) {
@@ -51,7 +64,7 @@ export function createScanner(store: LibraryStore, config: LibraryConfig, upload
             nextSeen.set(key, { since: performance.now(), stamp: after })
             continue
           }
-          stable.set(key, { entry, valid })
+          stable.set(key, { entry, valid, duration })
         } catch (error) {
           if (!isMissing(error) && !(error instanceof LibraryError && error.status === 404)) throw error
           waiting.add(key)
@@ -61,6 +74,22 @@ export function createScanner(store: LibraryStore, config: LibraryConfig, upload
         }
       }
       await assertRootUnchanged(root, config.mediaRoot)
+      // Fill in runtimes for titles that were indexed before duration detection,
+      // by reading only the movie header of each unchanged file.
+      for (const key of backfill) {
+        const entry = files.get(key)
+        if (!entry) continue
+        const file = await openMediaFile(root, entry.relative).catch(() => null)
+        if (!file) continue
+        try {
+          if (sameStamp(file.stamp, entry.stamp)) {
+            const seconds = await readDuration(file.file, file.stamp.size)
+            if (seconds) durations.set(key, seconds)
+          }
+        } finally {
+          await file.file.close()
+        }
+      }
       store.transact(() => {
         const counts = { indexed: 0, published: 0, pending: 0, missing: 0 }
         const conflicts = pendingClaims(store.files().filter(row => files.has(row.path_key)))
@@ -75,7 +104,7 @@ export function createScanner(store: LibraryStore, config: LibraryConfig, upload
         }
         for (const [key, value] of stable) {
           if (uploadInProgress.has(key) || store.fileAt(key)?.file_version !== snapshot.get(key)?.file_version) continue
-          const indexed = indexMedia(store, value.entry, value.valid, 'scan', conflicts)
+          const indexed = indexMedia(store, value.entry, value.valid, 'scan', conflicts, value.duration)
           counts.indexed++
           counts[indexed.state]++
         }
@@ -88,6 +117,11 @@ export function createScanner(store: LibraryStore, config: LibraryConfig, upload
             // metadata but do not stream the changed bytes while it settles.
             store.unavailable(before.id, before.file_version)
           }
+        }
+        for (const [key, seconds] of durations) {
+          const row = snapshot.get(key)
+          if (!row?.title_id) continue
+          store.fillRuntime(row.title_id, Math.max(1, Math.round(seconds / 60)))
         }
         const result: ScanResult = {
           id, state: 'success', startedAt, finishedAt: new Date().toISOString(), discovered: files.size,

@@ -39,6 +39,8 @@ export function indexMedia(
   valid: boolean,
   source: 'scan' | 'upload',
   conflicts: ReadonlySet<string>,
+  // Video length in seconds, read from the MP4 header so nobody types it by hand.
+  durationSeconds?: number | null,
 ): { id: string; state: MediaRecord['state']; added: boolean } {
   const key = pathKey(entry.relative)
   const existing = store.fileAt(key)
@@ -68,7 +70,8 @@ export function indexMedia(
     else {
       titleId = existingTitle?.id ?? store.createTitle(match.kind, {
         title: match.title, year: match.year, description: store.setting(defaultDescriptionKey) ?? '', poster_path: null,
-        original_title: null, genres: '[]', region: null, rating: null, runtime: null, director: null,
+        original_title: null, genres: '[]', region: null, rating: null,
+        runtime: durationSeconds ? Math.max(1, Math.round(durationSeconds / 60)) : null, director: null,
         // A star parsed from the filename becomes this title's cast, so the actor
         // tab can find the film without the actor name polluting the title.
         cast_members: match.actor ? JSON.stringify([match.actor]) : '[]', backdrop_path: null,

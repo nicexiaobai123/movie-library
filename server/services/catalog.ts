@@ -7,7 +7,7 @@ import { parseList, serializeList } from '../db/library.ts'
 import type { LibraryConfig } from '../domain/config.ts'
 import { errorCode, LibraryError } from '../domain/errors.ts'
 import { recognize, titleIdentity } from '../domain/recognition.ts'
-import { posterMime, validMp4, verifyPoster } from '../storage/formats.ts'
+import { posterMime, readDuration, validMp4, verifyPoster } from '../storage/formats.ts'
 import { assertFileName, ensureMediaDirectory, inspectMediaFile, isMissing, openMediaFile, pathKey, posterFolder, resolveMediaRoot, sameStamp, uploadFolder, videoFileName } from '../storage/paths.ts'
 import { placeFile, receiveFile } from '../storage/uploads.ts'
 import type { UploadInput } from '../storage/uploads.ts'
@@ -59,13 +59,16 @@ export function createCatalog(store: LibraryStore, config: LibraryConfig) {
     try {
       const root = await resolveMediaRoot(config.mediaRoot)
       const directory = await ensureMediaDirectory(root, uploadFolder)
+      // The duration is captured during validation, while the file is still open.
+      let duration: number | null = null
       const staged = await receiveFile(root, input, config.maxUploadBytes, async (file, size) => {
         if (!await validMp4(file, size)) throw new LibraryError(422, '文件不是完整的 MP4，无法入库。')
+        duration = await readDuration(file, size)
       })
       try {
         await placeFile(root, staged.path, directory, name)
         const stamp = await inspectMediaFile(root, relative)
-        const id = store.transact(() => indexMedia(store, { relative, stamp }, true, 'upload', pendingClaims(store.files())).id)
+        const id = store.transact(() => indexMedia(store, { relative, stamp }, true, 'upload', pendingClaims(store.files()), duration).id)
         return fileForAdmin(id)
       } finally {
         await staged.dispose()

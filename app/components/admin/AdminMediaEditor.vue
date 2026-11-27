@@ -24,6 +24,20 @@ const posterInput = ref<HTMLInputElement | null>(null)
 const initialTitle = props.titles.find(title => title.id === props.item.titleId)
 const orderedTitles = computed(() => [...props.titles].sort((a, b) => a.title.localeCompare(b.title, 'zh-CN') || (a.year ?? 0) - (b.year ?? 0)))
 
+// Filtering happens client-side: the whole title list already arrives with the
+// admin payload, so typing is instant and costs no extra request.
+const titleQuery = ref('')
+const filteredTitles = computed(() => {
+  const needle = titleQuery.value.trim().toLowerCase()
+  if (!needle) return orderedTitles.value
+  const matched = orderedTitles.value.filter(title => title.title.toLowerCase().includes(needle))
+  // The current selection must stay in the list, otherwise the <select> has no
+  // matching option and renders blank while the editor still points at it.
+  const selected = orderedTitles.value.find(title => title.id === draft.titleId)
+  return selected && !matched.some(title => title.id === selected.id) ? [selected, ...matched] : matched
+})
+
+
 // Free-text fields accept 、, ， or , as separators so typing is forgiving.
 function splitList(value: string): string[] {
   return [...new Set(value.split(/[、,，;；]+/).map(item => item.trim()).filter(Boolean))].slice(0, 20)
@@ -126,6 +140,13 @@ function selectTitle(event: Event) {
   Object.assign(draft, titleFields(selectedTitle.value))
   posterError.value = ''
   posterStatus.value = ''
+  errorMessage.value = ''
+}
+
+// Detach from an existing title and start a fresh one.
+function clearTitleSelection() {
+  draft.titleId = ''
+  Object.assign(draft, titleFields(undefined))
   errorMessage.value = ''
 }
 
@@ -316,22 +337,48 @@ onBeforeUnmount(() => {
         <legend class="visually-hidden">条目资料</legend>
         <div class="editor-field">
           <label for="admin-media-title-id">归属条目</label>
-          <select
-            id="admin-media-title-id"
-            class="field"
-            :value="draft.titleId"
-            :disabled="posterUploading"
-            aria-describedby="admin-media-association-help"
-            data-test="admin-media-title-id"
-            @change="selectTitle"
-          >
-            <option value="">新建电影或剧集</option>
-            <option v-for="title in orderedTitles" :key="title.id" :value="title.id">
-              {{ title.kind === 'movie' ? '电影' : '剧集' }} · {{ title.title }}{{ title.year === null ? '' : `（${title.year}）` }}
-            </option>
-          </select>
+          <!-- A library can hold hundreds of titles, so the picker filters by name
+               instead of forcing a scroll through one long native list. -->
+          <div class="title-picker" :class="{ 'is-disabled': posterUploading }">
+            <input
+              id="admin-media-title-filter"
+              v-model="titleQuery"
+              class="field title-filter"
+              type="search"
+              autocomplete="off"
+              placeholder="输入片名筛选…"
+              aria-label="筛选归属条目"
+              aria-controls="admin-media-title-options"
+              data-test="admin-media-title-filter"
+              :disabled="posterUploading"
+            >
+            <select
+              id="admin-media-title-id"
+              v-model="draft.titleId"
+              class="field title-select"
+              :disabled="posterUploading"
+              aria-describedby="admin-media-association-help"
+              data-test="admin-media-title-id"
+              @change="selectTitle"
+            >
+              <option value="">新建电影或剧集</option>
+              <option v-for="title in filteredTitles" :key="title.id" :value="title.id">
+                {{ title.kind === 'movie' ? '电影' : '剧集' }} · {{ title.title }}{{ title.year === null ? '' : `（${title.year}）` }}
+              </option>
+            </select>
+            <button
+              v-if="draft.titleId && !titleQuery"
+              class="btn title-clear"
+              type="button"
+              :disabled="posterUploading"
+              data-test="admin-media-title-clear"
+              @click="clearTitleSelection"
+            >改为新建</button>
+          </div>
           <p id="admin-media-association-help" class="editor-hint">
-            {{ selectedTitle ? '已有条目的类型不能更改；片名、年份、简介、海报的修改会更新整个条目。' : '选择现有条目会载入该条目的资料。' }}
+            <template v-if="selectedTitle">已有条目的类型不能更改；片名、年份、简介、海报、演员的修改会更新整个条目。</template>
+            <template v-else-if="titleQuery && !filteredTitles.length">没有匹配「{{ titleQuery }}」的条目，可以新建。</template>
+            <template v-else>选择现有条目会载入该条目的资料。共 {{ titles.length }} 个条目，输入片名可快速筛选。</template>
           </p>
         </div>
 
@@ -560,6 +607,12 @@ onBeforeUnmount(() => {
 .poster-preview img { object-fit: cover; border-radius: var(--radius-sm); background: var(--bg-card); }
 .backdrop-preview { display: flex; align-items: center; gap: 0.75rem; margin: 0 0 0.4rem; }
 .backdrop-preview img { object-fit: cover; inline-size: 10rem; block-size: auto; border-radius: var(--radius-sm); background: var(--bg-card); }
+/* Title picker: a filter box beside the select keeps large libraries navigable. */
+.title-picker { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; }
+.title-filter { flex: 1 1 12rem; min-inline-size: 0; }
+.title-select { flex: 2 1 18rem; min-inline-size: 0; }
+.title-clear { flex: none; min-block-size: 44px; font-size: 0.84rem; }
+.title-picker.is-disabled { opacity: 0.7; }
 .poster-choose { justify-self: start; cursor: pointer; }
 .editor-field input:focus-visible + .poster-choose {
   outline: 2px solid var(--accent);
