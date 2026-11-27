@@ -63,15 +63,34 @@ test('duration is auto-detected and a large file list stays usable', { timeout: 
     await page.locator('[data-test="admin-media-row"]').first().waitFor()
 
     const rendered = await page.locator('[data-test="admin-media-row"]').count()
-    report.push(`rows rendered initially: ${rendered}`)
-    assert.ok(rendered <= 41, `only one page should render, got ${rendered}`)
+    report.push(`rows rendered on page 1: ${rendered}`)
+    assert.equal(rendered, 40, `one page of 40 should render, got ${rendered}`)
 
-    const more = page.locator('[data-test="admin-files-more"]')
-    await more.waitFor()
-    report.push(`more button: ${await more.innerText()}`)
-    await more.click()
-    await page.waitForFunction(() => document.querySelectorAll('[data-test="admin-media-row"]').length > 41, null, { timeout: 10_000 })
-    report.push(`after more: ${await page.locator('[data-test="admin-media-row"]').count()} rows`)
+    // Numbered pagination replaces the old "show more" button.
+    const pager = page.locator('[data-test="admin-files-pager"]')
+    await pager.waitFor()
+    report.push(`pager: ${(await pager.locator('.pager-info').innerText()).trim()}`)
+    const pageButtons = await pager.locator('.pager-number').allTextContents()
+    report.push(`page buttons: ${pageButtons.join(', ')}`)
+    assert.ok(pageButtons.includes('2'), 'a second page must be offered')
+
+    await pager.locator('[data-test="admin-files-next"]').click()
+    await page.waitForFunction(() => {
+      const node = document.querySelector('[data-test="admin-files-pager"] .pager-info')
+      return node?.textContent?.includes('第 2 /')
+    }, null, { timeout: 10_000 })
+    const page2 = await page.locator('[data-test="admin-media-row"]').count()
+    report.push(`page 2 rows: ${page2}`)
+    assert.equal(page2, 20, 'the second page holds the remaining 20')
+
+    // Jumping straight to a page number works as well.
+    await pager.locator('[data-test="admin-files-page-1"]').click()
+    await page.waitForFunction(() => {
+      const node = document.querySelector('[data-test="admin-files-pager"] .pager-info')
+      return node?.textContent?.includes('第 1 /')
+    }, null, { timeout: 10_000 })
+    report.push(`back to page 1: ${await page.locator('[data-test="admin-media-row"]').count()} rows`)
+    await page.screenshot({ path: '.test-artifacts/admin-pager.png', fullPage: false })
 
     // Searching narrows the list without scrolling.
     const search = page.locator('[data-test="admin-files-query"]')

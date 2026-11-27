@@ -57,11 +57,11 @@ const rows = computed(() => props.items
   .map(item => ({ item, linked: linkedTitle(item) })))
 const pinned = computed(() => rows.value.some(({ item }) => !matchesFilter(item, filter.value)))
 
-// A large library would otherwise render hundreds of rows at once, so the list is
-// filtered by name and revealed in pages; the open editor is always kept visible.
+// A large library cannot render hundreds of rows at once, so the list is filtered
+// by name and split into numbered pages like a normal media library admin.
 const pageSize = 40
 const query = ref('')
-const visibleCount = ref(pageSize)
+const page = ref(1)
 
 const searched = computed(() => {
   const needle = query.value.trim().toLowerCase()
@@ -72,16 +72,39 @@ const searched = computed(() => {
     || item.relativePath.toLowerCase().includes(needle)
     || linked.toLowerCase().includes(needle))
 })
+const pageCount = computed(() => Math.max(1, Math.ceil(searched.value.length / pageSize)))
 const visibleRows = computed(() => {
   const list = searched.value
-  if (list.length <= visibleCount.value) return list
-  const head = list.slice(0, visibleCount.value)
-  // Never hide the row being edited.
+  const start = (page.value - 1) * pageSize
+  const slice = list.slice(start, start + pageSize)
+  // The row being edited must stay reachable even if it sits on another page.
   const editing = list.find(({ item }) => item.id === editingId.value)
-  return editing && !head.some(({ item }) => item.id === editingId.value) ? [...head, editing] : head
+  return editing && !slice.some(({ item }) => item.id === editingId.value) ? [...slice, editing] : slice
 })
-const hiddenCount = computed(() => Math.max(0, searched.value.length - visibleRows.value.length))
-watch([filter, query], () => { visibleCount.value = pageSize })
+
+// Page numbers with the first/last always visible and a short window around the
+// current one, so a hundred pages do not produce a hundred buttons.
+const pages = computed<(number | 'gap')[]>(() => {
+  const total = pageCount.value
+  if (total <= 7) return Array.from({ length: total }, (_, index) => index + 1)
+  const set = new Set([1, total, page.value, page.value - 1, page.value + 1])
+  const numbers = [...set].filter(value => value >= 1 && value <= total).sort((a, b) => a - b)
+  const result: (number | 'gap')[] = []
+  let previous = 0
+  for (const value of numbers) {
+    if (previous && value - previous > 1) result.push('gap')
+    result.push(value)
+    previous = value
+  }
+  return result
+})
+
+function goToPage(next: number) {
+  page.value = Math.min(Math.max(1, next), pageCount.value)
+}
+watch([filter, query], () => { page.value = 1 })
+// A shrinking list must not leave the view on a page that no longer exists.
+watch(pageCount, total => { if (page.value > total) page.value = total })
 const emptyMessage = computed(() => {
   if (counts.value.all === 0) return '片库还没有视频。可上传 MP4，或扫描磁盘中的媒体目录。'
   if (filter.value === 'pending') return '没有待整理的文件，可在「全部」中编辑已整理的文件。'
@@ -220,11 +243,39 @@ watch(() => props.items, (items) => {
             />
           </li>
         </ul>
-        <div v-if="hiddenCount" class="files-more">
-          <button class="btn btn--ghost" type="button" data-test="admin-files-more" @click="visibleCount += pageSize">
-            显示更多（还有 {{ hiddenCount }} 个）
-          </button>
-        </div>
+        <nav v-if="pageCount > 1" class="files-pager" aria-label="文件清单翻页" data-test="admin-files-pager">
+          <p class="pager-info">
+            共 {{ searched.length }} 个文件，第 {{ page }} / {{ pageCount }} 页
+          </p>
+          <div class="pager-controls">
+            <button
+              class="btn btn--ghost"
+              type="button"
+              :disabled="page <= 1"
+              data-test="admin-files-prev"
+              @click="goToPage(page - 1)"
+            >上一页</button>
+            <template v-for="(entry, index) in pages" :key="`${entry}-${index}`">
+              <span v-if="entry === 'gap'" class="pager-gap" aria-hidden="true">…</span>
+              <button
+                v-else
+                class="btn pager-number"
+                :class="{ 'is-current': entry === page }"
+                type="button"
+                :aria-current="entry === page ? 'page' : undefined"
+                :data-test="`admin-files-page-${entry}`"
+                @click="goToPage(entry)"
+              >{{ entry }}</button>
+            </template>
+            <button
+              class="btn btn--ghost"
+              type="button"
+              :disabled="page >= pageCount"
+              data-test="admin-files-next"
+              @click="goToPage(page + 1)"
+            >下一页</button>
+          </div>
+        </nav>
       </div>
     </template>
   </section>
@@ -298,6 +349,19 @@ watch(() => props.items, (items) => {
 .files-search { margin-block-end: 0.6rem; }
 .files-search input { inline-size: 100%; }
 .files-more { display: flex; justify-content: center; padding-block: 1.2rem 0; }
+/* Numbered pager: the same shape a media library admin normally uses. */
+.files-pager { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 0.7rem 1rem; padding-block: 1.1rem 0; }
+.pager-info { margin: 0; color: var(--text-muted); font-size: 0.8rem; font-variant-numeric: tabular-nums; }
+.pager-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 0.3rem; }
+.pager-controls .btn { min-block-size: 36px; padding-inline: 0.7rem; font-size: 0.82rem; }
+.pager-number { min-inline-size: 36px; justify-content: center; color: var(--text-secondary); }
+.pager-number.is-current {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-weight: 600;
+}
+.pager-gap { padding-inline: 0.2rem; color: var(--text-muted); font-size: 0.82rem; }
 .pinned-note { padding-block: 1rem 0; }
 .file-list {
   margin: 0;
