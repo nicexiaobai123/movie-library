@@ -29,6 +29,7 @@
     "test:dialog": "node --test tests/editor-dialog.test.mjs",
     "test:clean": "node --test tests/admin-clean.test.mjs",
     "test:spacing": "node --test tests/admin-spacing.test.mjs",
+    "test:pager": "node --test tests/browse-pager.test.mjs",
     "backup": "node scripts/backup.mjs",
     "test:frame": "node --test tests/frame.test.mjs",
     "test:control": "node --test tests/control.test.mjs",

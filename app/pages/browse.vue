@@ -59,7 +59,38 @@ const { data, status, refresh } = await useFetch<BrowseResult>('/api/library/bro
 })
 const result = computed(() => data.value)
 const pages = computed(() => Math.max(1, Math.ceil((result.value?.total ?? 0) / (result.value?.pageSize ?? 24))))
+
+// Page numbers with the first/last always reachable and a short window around the
+// current one, so a hundred pages do not produce a hundred buttons.
+const pageNumbers = computed<(number | 'gap')[]>(() => {
+  const total = pages.value
+  if (total <= 7) return Array.from({ length: total }, (_, index) => index + 1)
+  const wanted = new Set([1, total, filters.value.page, filters.value.page - 1, filters.value.page + 1])
+  const sorted = [...wanted].filter(value => value >= 1 && value <= total).sort((a, b) => a - b)
+  const out: (number | 'gap')[] = []
+  let previous = 0
+  for (const value of sorted) {
+    if (previous && value - previous > 1) out.push('gap')
+    out.push(value)
+    previous = value
+  }
+  return out
+})
+
+const rangeStart = computed(() => (result.value?.items.length ? (filters.value.page - 1) * (result.value.pageSize ?? 24) + 1 : 0))
+const rangeEnd = computed(() => rangeStart.value + (result.value?.items.length ?? 0) - 1)
+
 const sheetOpen = ref(false)
+
+// Changing the page also returns to the top, so the new results start in view.
+function goToPage(next: number) {
+  const target = Math.min(Math.max(1, next), pages.value)
+  if (target === filters.value.page) return
+  update({ page: target })
+  void nextTick(() => {
+    document.getElementById('browse-results')?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+  })
+}
 
 // Every filter is a URL parameter, so filters survive refresh and can be shared.
 function update(patch: Record<string, string | number | null | undefined>) {
@@ -192,15 +223,33 @@ function clearAll() {
           <NuxtLink v-else to="/admin" class="btn">进入管理后台上传</NuxtLink>
         </div>
         <template v-else>
-          <ul class="grid" role="list">
+          <ul id="browse-results" class="grid" role="list">
             <li v-for="item in result.items" :key="item.id">
               <MovieCard :item="item" />
             </li>
           </ul>
-          <nav v-if="pages > 1" class="pager" aria-label="翻页">
-            <button class="btn btn--ghost" type="button" :disabled="filters.page <= 1" @click="update({ page: filters.page - 1 })">上一页</button>
-            <span class="pager-info">第 {{ filters.page }} / {{ pages }} 页</span>
-            <button class="btn btn--ghost" type="button" :disabled="filters.page >= pages" @click="update({ page: filters.page + 1 })">下一页</button>
+          <!-- Browsing a large library needs real pagination: a count, page numbers
+               and a jump back to the top, like a streaming catalogue. -->
+          <nav v-if="pages > 1" class="pager" aria-label="翻页" data-test="browse-pager">
+            <p class="pager-info">
+              第 {{ rangeStart }}–{{ rangeEnd }} 部，共 {{ result.total }} 部<template v-if="pages > 1"> · 第 {{ filters.page }} / {{ pages }} 页</template>
+            </p>
+            <div class="pager-controls">
+              <button class="btn btn--ghost" type="button" :disabled="filters.page <= 1" data-test="browse-prev" @click="goToPage(filters.page - 1)">上一页</button>
+              <template v-for="(entry, index) in pageNumbers" :key="`${entry}-${index}`">
+                <span v-if="entry === 'gap'" class="pager-gap" aria-hidden="true">…</span>
+                <button
+                  v-else
+                  class="btn pager-number"
+                  :class="{ 'is-current': entry === filters.page }"
+                  type="button"
+                  :aria-current="entry === filters.page ? 'page' : undefined"
+                  :data-test="`browse-page-${entry}`"
+                  @click="goToPage(entry)"
+                >{{ entry }}</button>
+              </template>
+              <button class="btn btn--ghost" type="button" :disabled="filters.page >= pages" data-test="browse-next" @click="goToPage(filters.page + 1)">下一页</button>
+            </div>
           </nav>
         </template>
       </section>
@@ -247,8 +296,18 @@ function clearAll() {
 @keyframes shimmer { to { background-position: -220% 0; } }
 .state { display: grid; justify-items: start; gap: 0.8rem; padding-block: 3rem; color: var(--text-secondary); }
 .state h2 { font-size: 1.15rem; color: var(--text); }
-.pager { display: flex; align-items: center; justify-content: center; gap: 1rem; padding-block-start: 2.2rem; }
-.pager-info { color: var(--text-muted); font-size: 0.82rem; font-variant-numeric: tabular-nums; }
+.pager { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 0.8rem 1rem; padding-block-start: 2.2rem; }
+.pager-info { margin: 0; color: var(--text-muted); font-size: 0.82rem; font-variant-numeric: tabular-nums; }
+.pager-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 0.3rem; }
+.pager-controls .btn { min-block-size: 38px; padding-inline: 0.75rem; font-size: 0.84rem; }
+.pager-number { min-inline-size: 38px; justify-content: center; color: var(--text-secondary); }
+.pager-number.is-current {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-weight: 600;
+}
+.pager-gap { padding-inline: 0.2rem; color: var(--text-muted); font-size: 0.82rem; }
 
 @media (max-width: 62rem) {
   .browse-layout { grid-template-columns: minmax(0, 1fr); }
