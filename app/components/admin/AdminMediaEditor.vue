@@ -442,13 +442,9 @@ onBeforeUnmount(() => {
             </select>
           </div>
           <div class="editor-field">
-            <label for="admin-media-year">年份 <span>（可选）</span></label>
-            <input id="admin-media-year" v-model.number="draft.year" class="field" type="number" min="1800" max="2300" step="1" inputmode="numeric" placeholder="未知可留空" data-test="admin-media-year">
+            <label for="admin-media-cast">主演 <span>（可选，用、分隔）</span></label>
+            <input id="admin-media-cast" v-model="draft.castText" class="field" type="text" maxlength="400" placeholder="杨幂、胡歌" data-test="admin-media-cast">
           </div>
-        </div>
-        <div class="editor-field">
-          <label for="admin-media-cast">主演 <span>（可选，用、分隔）</span></label>
-          <input id="admin-media-cast" v-model="draft.castText" class="field" type="text" maxlength="400" placeholder="也可以直接把文件名写成 演员-片名-标识" data-test="admin-media-cast">
         </div>
         <div class="editor-field">
           <label for="admin-media-description">简介 <span>（可选）</span></label>
@@ -466,13 +462,19 @@ onBeforeUnmount(() => {
                 <input id="admin-media-original-title" v-model="draft.originalTitle" class="field" type="text" maxlength="200" placeholder="例如英文原名" data-test="admin-media-original-title">
               </div>
               <div class="editor-field">
+                <label for="admin-media-year">年份 <span>（可选）</span></label>
+                <input id="admin-media-year" v-model.number="draft.year" class="field" type="number" min="1800" max="2300" step="1" inputmode="numeric" placeholder="未知可留空" data-test="admin-media-year">
+              </div>
+            </div>
+            <div class="editor-line">
+              <div class="editor-field">
                 <label for="admin-media-region">地区 <span>（可选）</span></label>
                 <input id="admin-media-region" v-model="draft.region" class="field" type="text" maxlength="40" placeholder="例如 中国大陆" data-test="admin-media-region">
               </div>
-            </div>
-            <div class="editor-field">
-              <label for="admin-media-genres">类型标签 <span>（可选，用、分隔）</span></label>
-              <input id="admin-media-genres" v-model="draft.genresText" class="field" type="text" maxlength="400" placeholder="例如 剧情、科幻" data-test="admin-media-genres">
+              <div class="editor-field">
+                <label for="admin-media-genres">类型标签 <span>（可选，用、分隔）</span></label>
+                <input id="admin-media-genres" v-model="draft.genresText" class="field" type="text" maxlength="400" placeholder="例如 剧情、科幻" data-test="admin-media-genres">
+              </div>
             </div>
             <div class="editor-line">
               <div class="editor-field">
@@ -592,13 +594,17 @@ onBeforeUnmount(() => {
             <button class="btn conflict-confirm" type="button" :disabled="posterUploading" data-test="admin-media-replace" @click="save(true)">替换占用文件并保存</button>
           </div>
         </div>
+      </fieldset>
+      <!-- The action bar is a sibling of the scrolling fields, so it is always
+           visible no matter how tall the form gets. -->
+      <div class="editor-footer">
         <div class="editor-actions">
           <button class="btn btn--primary" type="submit" :disabled="posterUploading" data-test="admin-media-save">
             {{ saving ? '正在保存…' : '保存编辑' }}
           </button>
           <button class="btn" type="button" data-test="admin-media-cancel" @click="emit('cancel')">取消编辑</button>
         </div>
-      </fieldset>
+      </div>
     </form>
     </section>
   </div>
@@ -623,17 +629,60 @@ onBeforeUnmount(() => {
 .media-editor {
   min-width: 0;
   position: relative;
+  display: flex;
+  flex-direction: column;
+  min-block-size: 0;
   inline-size: min(100%, 46rem);
-  max-block-size: min(88vh, 88svh);
-  overflow-y: auto;
-  overscroll-behavior: contain;
-  padding: clamp(1.1rem, 2.5vw, 1.8rem);
+  /* A definite height rather than a max: the fields region always has a real size to
+     scroll inside, so the panel itself never grows past the viewport. */
+  block-size: min(90vh, 90svh);
+  max-block-size: min(90vh, 90svh);
+  overflow: hidden;
+  padding: 0;
   border: 1px solid var(--border-strong);
   border-radius: var(--radius-lg);
   background: var(--bg-elevated);
   box-shadow: var(--shadow-player);
   animation: editor-in var(--dur) var(--ease);
 }
+/* The form fills what the header leaves; the fields scroll inside it. */
+.media-editor form {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-block-size: 0;
+  overflow: hidden;
+}
+.media-editor .editor-fields {
+  display: flex;
+  flex-direction: column;
+  gap: 0.85rem;
+  /* Fields scroll; a fieldset will not shrink on its own, so every constraint the
+     flexbox needs is stated explicitly. Extra bottom padding keeps the last section
+     clear of the action bar. */
+  min-block-size: 0;
+  min-inline-size: 0;
+  flex: 1 1 auto;
+  border: 0;
+  margin: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 0 clamp(1.1rem, 2.5vw, 1.8rem) 1.1rem;
+  scrollbar-width: thin;
+}
+/* A slim, low-contrast scrollbar so the field list reads as a panel rather than a
+   browser default widget. */
+.media-editor .editor-fields::-webkit-scrollbar { inline-size: 8px; }
+.media-editor .editor-fields::-webkit-scrollbar-track { background: transparent; }
+.media-editor .editor-fields::-webkit-scrollbar-thumb {
+  border: 2px solid transparent;
+  border-radius: 999px;
+  background: var(--border-strong);
+  background-clip: content-box;
+}
+.media-editor .editor-fields:hover::-webkit-scrollbar-thumb { background: var(--text-muted); background-clip: content-box; }
+/* The visually hidden legend must not take part in the flex layout. */
+.media-editor .editor-fields > legend { flex: none; }
 @keyframes editor-in {
   from { opacity: 0; transform: translateY(0.75rem) scale(0.99); }
 }
@@ -642,6 +691,8 @@ onBeforeUnmount(() => {
   align-items: flex-start;
   justify-content: space-between;
   gap: 1rem;
+  flex: none;
+  padding: clamp(1.1rem, 2.5vw, 1.8rem) clamp(1.1rem, 2.5vw, 1.8rem) 0.6rem;
 }
 .editor-modal-file {
   margin: 0.25rem 0 0;
@@ -670,11 +721,13 @@ onBeforeUnmount(() => {
   font-weight: 600;
 }
 .media-editor h4 + p { margin-top: 0.4rem; }
-.editor-fields, .editor-subgroup, .editor-field { display: grid; min-width: 0; }
+.editor-subgroup, .editor-field { display: grid; min-width: 0; }
+/* The field list is the dialog's scrolling region; its height comes from the grid
+   track above, so the optional block can expand without stretching the panel. */
 .editor-fields {
   gap: 1.15rem;
   max-width: 50rem;
-  margin: 1.25rem 0 0;
+  margin: 0;
   padding: 0;
   border: 0;
 }
@@ -718,7 +771,9 @@ onBeforeUnmount(() => {
 .editor-field label { font-weight: 600; font-size: 0.9rem; }
 .editor-field label span { color: var(--text-muted); font-size: 0.85em; font-weight: 400; }
 .editor-field .field { background: var(--bg); }
-.editor-field textarea { min-height: 4.5rem; resize: vertical; }
+.editor-field textarea { min-height: 3.6rem; resize: vertical; }
+.editor-field { gap: 0.3rem; }
+.editor-field label { font-weight: 600; font-size: 0.88rem; }
 .editor-line {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -738,6 +793,12 @@ onBeforeUnmount(() => {
 }
 .editor-error { color: var(--color-danger, var(--accent-strong)); }
 .editor-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 0.65rem; }
+.editor-footer {
+  flex: none;
+  padding: 0.85rem clamp(1.1rem, 2.5vw, 1.8rem);
+  border-block-start: 1px solid var(--border);
+  background: var(--bg-elevated);
+}
 .poster-preview { display: flex; align-items: center; gap: 0.75rem; margin: 0; }
 .poster-preview img { object-fit: cover; border-radius: var(--radius-sm); background: var(--bg-card); }
 .backdrop-preview { display: flex; align-items: center; gap: 0.75rem; margin: 0 0 0.4rem; }

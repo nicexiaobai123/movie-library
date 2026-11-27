@@ -91,18 +91,23 @@ test('list panel is tall with a permanent pager and a compact editor', { timeout
     const metrics = await page.evaluate(() => {
       const modal = document.querySelector('[data-test="admin-media-modal"]')
       const details = modal.querySelector('[data-test="admin-media-more"]')
-      const visible = (selector) => {
+      // A field inside a closed <details> still has a box, so visibility has to be
+      // judged from the field itself plus which container it lives in.
+      const inDetails = (selector) => Boolean(modal.querySelector(selector)?.closest('details'))
+      const shown = (selector) => {
         const node = modal.querySelector(selector)
         if (!node) return false
         const rect = node.getBoundingClientRect()
-        return rect.height > 0 && rect.top < innerHeight
+        return rect.height > 0 && rect.top < innerHeight && !node.closest('details:not([open])')
       }
       return {
-        title: visible('[data-test="admin-media-title"]'),
-        kind: visible('[data-test="admin-media-kind"]'),
-        cast: visible('[data-test="admin-media-cast"]'),
-        description: visible('[data-test="admin-media-description"]'),
-        runtime: visible('[data-test="admin-media-runtime"]'),
+        title: shown('[data-test="admin-media-title"]'),
+        kind: shown('[data-test="admin-media-kind"]'),
+        cast: shown('[data-test="admin-media-cast"]'),
+        description: shown('[data-test="admin-media-description"]'),
+        runtime: shown('[data-test="admin-media-runtime"]'),
+        runtimeInDetails: inDetails('[data-test="admin-media-runtime"]'),
+        yearInDetails: inDetails('[data-test="admin-media-year"]'),
         moreOpen: details?.open ?? null,
         modalHeight: Math.round(modal.getBoundingClientRect().height),
       }
@@ -110,7 +115,9 @@ test('list panel is tall with a permanent pager and a compact editor', { timeout
     report.push(`editor: ${JSON.stringify(metrics)}`)
     assert.ok(metrics.title && metrics.kind && metrics.cast, 'title, kind and cast stay visible up front')
     assert.equal(metrics.moreOpen, false, 'optional fields start collapsed for a new title')
-    assert.equal(metrics.runtime, false, 'runtime moves into the optional block')
+    assert.equal(metrics.runtime, false, 'runtime is hidden while the optional block is closed')
+    assert.ok(metrics.runtimeInDetails, 'runtime lives in the optional block')
+    assert.ok(metrics.yearInDetails, 'the year field also lives in the optional block')
 
     // 4. Expanding the optional block reveals the remaining fields.
     await page.locator('[data-test="admin-media-more"] summary').click()
@@ -118,7 +125,8 @@ test('list panel is tall with a permanent pager and a compact editor', { timeout
     const afterExpand = await page.evaluate(() => {
       const modal = document.querySelector('[data-test="admin-media-modal"]')
       const node = modal.querySelector('[data-test="admin-media-runtime"]')
-      return { open: modal.querySelector('[data-test="admin-media-more"]').open, runtimeVisible: node.getBoundingClientRect().height > 0 }
+      const open = modal.querySelector('[data-test="admin-media-more"]').open
+      return { open, runtimeVisible: open && node.getBoundingClientRect().height > 0 }
     })
     report.push(`after expand: ${JSON.stringify(afterExpand)}`)
     assert.equal(afterExpand.open, true)

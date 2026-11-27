@@ -151,6 +151,7 @@ pnpm test:scale      # 片长自动识别，以及大量条目下的搜索与分
 pnpm test:notice     # 保存提示浮层不占据版面且会自动消失
 pnpm test:layout     # 后台列表等高行、底部固定分页、编辑为弹窗且不撑高页面
 pnpm test:compact    # 加长面板、常驻分页、编辑器只露出常用字段
+pnpm test:dialog     # 编辑弹窗无自身滚动条、保存按钮常驻、年份归入更多资料
 pnpm backup          # 用 VACUUM INTO 备份数据库到 backups/ 并统计媒体目录
 pnpm test:frame      # 用本机 Edge 验证「取视频第一帧作封面」
 pnpm test:control    # Windows：在独立临时目录验证启动、停止和重启脚本

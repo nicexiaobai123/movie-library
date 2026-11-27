@@ -26,6 +26,7 @@
     "test:notice": "node --test tests/admin-notice.test.mjs",
     "test:layout": "node --test tests/admin-layout.test.mjs",
     "test:compact": "node --test tests/admin-compact.test.mjs",
+    "test:dialog": "node --test tests/editor-dialog.test.mjs",
     "backup": "node scripts/backup.mjs",
     "test:frame": "node --test tests/frame.test.mjs",
     "test:control": "node --test tests/control.test.mjs",
