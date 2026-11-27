@@ -173,12 +173,12 @@ watch(() => props.items, (items) => {
 </script>
 
 <template>
-  <section class="files-panel" aria-labelledby="admin-files-title">
+  <section class="files-panel" aria-label="文件清单">
+    <!-- The tab above already names this panel, so the heading is a hidden one for
+         screen readers plus a single action on the right. -->
+    <h2 id="admin-files-title" ref="heading" class="visually-hidden" tabindex="-1">文件清单</h2>
     <header class="files-heading">
-      <div>
-        <h2 id="admin-files-title" ref="heading" tabindex="-1">文件清单</h2>
-        <p>整理待处理的视频，或编辑已发布和缺失的条目。</p>
-      </div>
+      <p class="files-summary">共 {{ counts.all }} 个文件<template v-if="counts.pending">，{{ counts.pending }} 个待整理</template></p>
       <button class="btn" type="button" :disabled="loading || disabled" data-test="admin-library-refresh" @click="emit('refresh')">
         {{ loading ? '正在刷新…' : '刷新清单' }}
       </button>
@@ -335,15 +335,16 @@ watch(() => props.items, (items) => {
 .files-heading {
   display: flex;
   flex-wrap: wrap;
-  align-items: flex-end;
+  align-items: center;
   justify-content: space-between;
-  gap: 1.1rem 2rem;
+  gap: 0.75rem 2rem;
 }
-.files-heading h2 {
-  font-family: var(--font-display);
-  font-size: clamp(1.55rem, 2.5vw, 2rem);
-  font-weight: 600;
-  line-height: 1.3;
+/* A one-line count replaces the old title block; the tab already names the panel. */
+.files-summary {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 0.85rem;
+  font-variant-numeric: tabular-nums;
 }
 .files-heading p,
 .files-empty,
@@ -352,12 +353,12 @@ watch(() => props.items, (items) => {
   font-size: 0.9rem;
   line-height: 1.7;
 }
-.files-heading p { margin-top: 0.45rem; }
+.files-heading p { margin-top: 0; }
 .files-filters {
   display: flex;
   flex-wrap: wrap;
   gap: 0 1.7rem;
-  margin-block: 1.75rem 0;
+  margin-block: 1rem 0;
   border-block-end: 1px solid var(--border);
 }
 .filter-button {

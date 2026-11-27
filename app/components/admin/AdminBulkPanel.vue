@@ -181,9 +181,10 @@ async function saveDefault() {
 </script>
 
 <template>
-  <section class="bulk-panel" aria-labelledby="admin-bulk-title">
+  <section class="bulk-panel" aria-label="批量处理">
     <header class="bulk-heading">
-      <h2 id="admin-bulk-title">批量处理</h2>
+      <!-- The tab already names this panel; only the explanation is worth keeping. -->
+      <h2 id="admin-bulk-title" class="visually-hidden">批量处理</h2>
       <p>一次补齐简介和封面，或把待整理的文件按文件名推测的资料发布。每一项单独提交，个别失败不影响其余文件。</p>
     </header>
 

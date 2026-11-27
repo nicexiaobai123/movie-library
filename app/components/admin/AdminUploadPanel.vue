@@ -124,9 +124,10 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <section class="upload-panel" aria-labelledby="admin-upload-title">
+  <section class="upload-panel" aria-label="上传与扫描">
     <header class="upload-intro">
-      <h2 id="admin-upload-title">上传视频</h2>
+      <!-- The tab already names this panel; the hint below is the useful part. -->
+      <h2 id="admin-upload-title" class="visually-hidden">上传视频</h2>
       <p id="admin-upload-help">可一次选择多个 MP4。剧集请让文件名带集号，例如「潮声来处 S01E02.mp4」或「潮声来处 第02集.mp4」，系统会归到同一部剧。</p>
     </header>
 
