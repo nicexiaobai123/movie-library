@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import type { ActorList } from '#shared/types/library'
 
-useSeoMeta({ title: '明星 · 夜灯', description: '按演员浏览片库中的电影与剧集。' })
+useSeoMeta({ title: '演员 · 夜灯', description: '按演员浏览片库中的电影与剧集。' })
 
 const { data, status, refresh } = await useFetch<ActorList>('/api/library/actors', { deep: false })
 const actors = computed(() => data.value?.items ?? [])
@@ -11,7 +11,7 @@ const total = computed(() => actors.value.reduce((sum, actor) => sum + actor.cou
 <template>
   <div class="actors-page">
     <header class="shell actors-head">
-      <p class="eyebrow">明星</p>
+      <p class="eyebrow">演员</p>
       <h1>演员</h1>
       <p class="actors-lede">片库中出场过的演员，按作品数量排列。点开可以看他的全部作品。</p>
     </header>

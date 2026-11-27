@@ -46,9 +46,9 @@ test('star-title-tag filenames create actors without polluting titles', { timeou
     const context = await browser.newContext({ viewport: { width: 1200, height: 900 }, locale: 'zh-CN' })
     const page = await context.newPage()
 
-    // The 明星 tab is reachable from the header and lists both actors.
+    // The 演员 tab is reachable from the header and lists both actors.
     await page.goto(fx.base, { waitUntil: 'networkidle' })
-    await page.locator('.nav-links').getByRole('link', { name: '明星' }).click()
+    await page.locator('.nav-links').getByRole('link', { name: '演员' }).click()
     await page.waitForURL(`${fx.base}/actors`)
     await page.locator('[data-test="actor-grid"]').waitFor()
     assert.equal(await page.locator('.actor-card').count(), 2)
@@ -72,11 +72,11 @@ test('star-title-tag filenames create actors without polluting titles', { timeou
     const legends = await page.locator('.filter-group legend').allTextContents()
     report.push(`filter groups: ${legends.join(' / ')}`)
     assert.ok(!legends.includes('年份'), 'the year filter must be gone')
-    assert.ok(legends.includes('明星'), 'the actor filter must be present')
+    assert.ok(legends.includes('演员'), 'the actor filter must be present')
 
     // Filtering by actor narrows the grid.
     const before = await page.locator('.grid .card').count()
-    await page.locator('.filter-group', { hasText: '明星' }).locator('.chip', { hasText: '杨幂' }).click()
+    await page.locator('.filter-group', { hasText: '演员' }).locator('.chip', { hasText: '杨幂' }).click()
     await page.waitForURL(url => url.searchParams.get('actor') === '杨幂')
     await page.waitForFunction(expected => document.querySelectorAll('.grid .card').length < expected, before)
     report.push(`actor filter: ${before} → ${await page.locator('.grid .card').count()}`)

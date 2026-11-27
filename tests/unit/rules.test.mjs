@@ -18,7 +18,7 @@ test('movie and episode recognition from ordinary Chinese and structured names',
 })
 
 test('a star-title-tag filename keeps the star out of the title', () => {
-  // The documented convention: 明星 - 真实片名 - 无意义标识
+  // The documented convention: 演员 - 真实片名 - 无意义标识（文件名格式仍写作「明星-片名-标识」）
   assert.deepEqual(recognize('上传/杨幂-古剑奇谭-dx123.mp4').match, movie('古剑奇谭', null, '杨幂'))
   assert.deepEqual(recognize('上传/胡歌-琅琊榜-dx456.mp4').match, movie('琅琊榜', null, '胡歌'))
   // Season/episode markers still work alongside the cast prefix.

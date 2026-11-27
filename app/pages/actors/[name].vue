@@ -32,7 +32,7 @@ useSeoMeta({
         <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="m14.5 6-6 6 6 6" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" /></svg>
         全部演员
       </NuxtLink>
-      <p class="eyebrow">明星</p>
+      <p class="eyebrow">演员</p>
       <h1>{{ name }}</h1>
       <p v-if="summary" class="actor-lede">{{ summary.count }} 部作品</p>
     </header>

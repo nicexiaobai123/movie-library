@@ -29,7 +29,7 @@ const links = [
   { to: '/', label: '首页' },
   { to: '/browse?kind=movie', label: '电影' },
   { to: '/browse?kind=series', label: '剧集' },
-  { to: '/actors', label: '明星' },
+  { to: '/actors', label: '演员' },
   { to: '/my-list', label: '我的收藏' },
 ]
 

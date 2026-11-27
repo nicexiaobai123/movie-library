@@ -31,7 +31,7 @@ const filters = computed(readQuery)
 // shows its own kind switch; it just renders whichever kind was asked for.
 const isSeries = computed(() => filters.value.kind === 'series')
 const heading = computed(() => {
-  if (filters.value.actor) return { eyebrow: '明星', title: filters.value.actor, lede: `${filters.value.actor}在片库中的作品。` }
+  if (filters.value.actor) return { eyebrow: '演员', title: filters.value.actor, lede: `${filters.value.actor}在片库中的作品。` }
   if (isSeries.value) return { eyebrow: '剧集', title: '剧集', lede: '多集连续播放的作品，按季与集展开。' }
   if (filters.value.kind === 'movie') return { eyebrow: '电影', title: '电影', lede: '单部作品，按类型、地区和评分浏览。' }
   return { eyebrow: '片库', title: '全部作品', lede: '按类型、地区和评分浏览整座片库。' }
@@ -144,7 +144,7 @@ function clearAll() {
             </div>
           </fieldset>
           <fieldset v-if="result.facets.actors?.length" class="filter-group">
-            <legend>明星</legend>
+            <legend>演员</legend>
             <div class="chips">
               <button type="button" class="chip" :aria-pressed="!filters.actor" @click="update({ actor: null, page: null })">全部</button>
               <button
