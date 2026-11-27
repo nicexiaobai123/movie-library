@@ -318,9 +318,27 @@ function cancelPoster() {
   posterTransfer?.cancel()
 }
 
-onMounted(() => heading.value?.focus())
+// Escape closes the dialog. The listener lives on the dialog element itself, so it
+// only fires while the editor is open and never leaks to the rest of the page.
+function onKeydown(event: KeyboardEvent) {
+  if (event.key === 'Escape' && !saving.value) {
+    event.preventDefault()
+    event.stopPropagation()
+    emit('cancel')
+  }
+}
+
+let returnFocus: HTMLElement | null = null
+onMounted(() => {
+  returnFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null
+  heading.value?.focus()
+  // The page behind the dialog must not scroll under it.
+  document.body.style.overflow = 'hidden'
+})
 onBeforeUnmount(() => {
   disposed = true
+  document.body.style.overflow = ''
+  returnFocus?.focus()
   const current = posterTransfer
   posterTransfer = null
   current?.cancel()
@@ -328,11 +346,31 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <section id="admin-media-editor" class="media-editor" aria-labelledby="admin-editor-title">
-    <h4 id="admin-editor-title" ref="heading" tabindex="-1">编辑视频资料</h4>
-    <p v-if="!initialTitle" class="editor-hint">请核对根据文件名推测的内容，也可将文件归到已有电影或剧集。</p>
+  <!-- A modal dialog keeps the editor off the page flow: opening it no longer
+       grows the document, so the list keeps its shape. -->
+  <div class="editor-modal" data-test="admin-media-modal">
+    <div class="editor-scrim" aria-hidden="true" @click="emit('cancel')" />
+    <section
+      id="admin-media-editor"
+      class="media-editor"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="admin-editor-title"
+      data-test="admin-media-editor"
+      @keydown="onKeydown"
+    >
+      <header class="editor-modal-head">
+        <div>
+          <h4 id="admin-editor-title" ref="heading" tabindex="-1">编辑视频资料</h4>
+          <p class="editor-modal-file">{{ item.fileName }}</p>
+        </div>
+        <button class="editor-close" type="button" aria-label="关闭编辑" data-test="admin-media-close" @click="emit('cancel')">
+          <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="m7 7 10 10M17 7 7 17" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" /></svg>
+        </button>
+      </header>
+      <p v-if="!initialTitle" class="editor-hint">请核对根据文件名推测的内容，也可将文件归到已有电影或剧集。</p>
 
-    <form ref="form" autocomplete="off" :aria-busy="saving" data-test="admin-media-form" @submit.prevent="save()">
+      <form ref="form" autocomplete="off" :aria-busy="saving" data-test="admin-media-form" @submit.prevent="save()">
       <fieldset class="editor-fields" :disabled="saving || disabled">
         <legend class="visually-hidden">条目资料</legend>
         <div class="editor-field">
@@ -547,17 +585,70 @@ onBeforeUnmount(() => {
         </div>
       </fieldset>
     </form>
-  </section>
+    </section>
+  </div>
 </template>
 
 <style scoped>
+/* Modal layer: the list underneath never changes height. */
+.editor-modal {
+  position: fixed;
+  z-index: 60;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: clamp(0.75rem, 3vw, 2.5rem);
+}
+.editor-scrim {
+  position: absolute;
+  inset: 0;
+  background: rgb(4 5 7 / 0.72);
+  backdrop-filter: blur(2px);
+}
 .media-editor {
   min-width: 0;
-  margin-top: 1.4rem;
+  position: relative;
+  inline-size: min(100%, 46rem);
+  max-block-size: min(88vh, 88svh);
+  overflow-y: auto;
+  overscroll-behavior: contain;
   padding: clamp(1.1rem, 2.5vw, 1.8rem);
-  border-inline-start: 2px solid var(--border-strong);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-lg);
   background: var(--bg-elevated);
+  box-shadow: var(--shadow-player);
+  animation: editor-in var(--dur) var(--ease);
 }
+@keyframes editor-in {
+  from { opacity: 0; transform: translateY(0.75rem) scale(0.99); }
+}
+.editor-modal-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+}
+.editor-modal-file {
+  margin: 0.25rem 0 0;
+  color: var(--text-muted);
+  font-size: 0.82rem;
+  overflow-wrap: anywhere;
+}
+.editor-close {
+  flex: none;
+  display: grid;
+  place-items: center;
+  inline-size: 2.2rem;
+  block-size: 2.2rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+.editor-close svg { inline-size: 1.05rem; block-size: 1.05rem; }
+.editor-close:hover { border-color: var(--border-strong); color: var(--text); }
+.editor-close:focus-visible { outline: 2px solid var(--accent-strong); outline-offset: 2px; }
 .media-editor h4 {
   font-family: var(--font-display);
   font-size: 1.2rem;

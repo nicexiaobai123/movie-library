@@ -349,6 +349,38 @@ watch(() => props.items, (items) => {
 .files-search { margin-block-end: 0.6rem; }
 .files-search input { inline-size: 100%; }
 .files-more { display: flex; justify-content: center; padding-block: 1.2rem 0; }
+/* The list occupies a bounded area and the pager is pinned to its bottom, so the
+   page itself never grows and the controls stay where the eye expects them. */
+#admin-files-content {
+  display: flex;
+  flex-direction: column;
+  max-block-size: min(64vh, 40rem);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-card);
+  overflow: hidden;
+}
+#admin-files-content .files-search { flex: none; margin: 0; padding: 0.55rem 0.7rem; border-block-end: 1px solid var(--border); }
+#admin-files-content .files-empty { flex: 1; margin: 0; padding: 1.6rem 0.9rem; }
+/* Only the rows scroll; the pager below them does not move. */
+#admin-files-content .file-list {
+  flex: 1 1 auto;
+  min-block-size: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  margin: 0;
+  padding-inline: 0.7rem;
+  scrollbar-width: thin;
+}
+#admin-files-content .file-list::-webkit-scrollbar { inline-size: 8px; }
+#admin-files-content .file-list::-webkit-scrollbar-thumb { background: var(--border-strong); border-radius: 999px; }
+#admin-files-content .files-pager {
+  flex: none;
+  padding: 0.6rem 0.7rem;
+  border-block-start: 1px solid var(--border);
+  background: var(--bg-elevated);
+}
+#admin-files-content .pinned-note { flex: none; margin: 0; padding: 0.5rem 0.7rem; border-block-end: 1px solid var(--border); }
 /* Numbered pager: the same shape a media library admin normally uses. */
 .files-pager { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 0.7rem 1rem; padding-block: 1.1rem 0; }
 .pager-info { margin: 0; color: var(--text-muted); font-size: 0.8rem; font-variant-numeric: tabular-nums; }
@@ -369,14 +401,22 @@ watch(() => props.items, (items) => {
   list-style: none;
 }
 .file-row {
-  padding-block: 0.7rem;
+  /* A fixed height keeps the panel the same size on every page, so the pager never
+     jumps around and the document does not grow with the row count. Three text
+     lines (name / status / linkage) must fit, or content would overlap the button. */
+  block-size: 5.2rem;
+  display: flex;
+  align-items: center;
+  padding-block: 0;
   border-block-end: 1px solid var(--border);
+  overflow: hidden;
 }
 .file-summary {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
   gap: 0.6rem 1.5rem;
+  inline-size: 100%;
 }
 /* One compact line per file: name, then status and size, so a long list stays
    scannable instead of becoming a column of tall blocks. */
@@ -387,6 +427,11 @@ watch(() => props.items, (items) => {
 }
 .file-name {
   display: inline;
+  max-inline-size: 100%;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  vertical-align: bottom;
   font-size: 0.95rem;
   font-weight: 600;
   line-height: 1.45;
@@ -405,17 +450,26 @@ watch(() => props.items, (items) => {
   font-size: 0.8rem;
   line-height: 1.55;
 }
-.file-linkage { display: inline; margin-inline-start: 0.6rem; }
-.file-reason { display: block; margin-top: 0.3rem; white-space: pre-wrap; }
+.file-linkage {
+  display: inline;
+  margin-inline-start: 0.6rem;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  vertical-align: bottom;
+}
+.file-reason { display: block; margin-top: 0.15rem; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 .file-reason strong { color: var(--text-secondary); }
 .file-meta {
   display: flex;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   align-items: center;
   gap: 0.35rem 0.9rem;
-  margin-top: 0.25rem;
+  margin-top: 0.15rem;
+  overflow: hidden;
   color: var(--text-muted);
   font-size: 0.78rem;
+  white-space: nowrap;
 }
 .file-tag {
   display: inline-flex;
@@ -438,7 +492,9 @@ watch(() => props.items, (items) => {
 .file-tag--missing::before { background: var(--color-danger, var(--accent-strong)); }
 .file-edit { min-width: 4.8rem; }
 @media (max-width: 33rem) {
+  /* The button drops below the text on narrow screens, so the row needs more room. */
+  .file-row { block-size: auto; padding-block: 0.7rem; align-items: stretch; overflow: visible; }
   .file-summary { grid-template-columns: minmax(0, 1fr); }
-  .file-edit { justify-self: start; }
+  .file-edit { justify-self: start; margin-block-start: 0.5rem; }
 }
 </style>
