@@ -183,7 +183,7 @@ watch(() => props.items, (items) => {
       </div>
       <div id="admin-files-content">
         <p v-if="pinned" class="pinned-note" role="status">当前正在编辑的文件不符合筛选条件，仍会显示到编辑结束。</p>
-        <div v-if="counts.all > pageSize" class="files-search">
+        <div class="files-search">
           <label for="admin-files-query" class="visually-hidden">搜索文件</label>
           <input
             id="admin-files-query"
@@ -243,9 +243,11 @@ watch(() => props.items, (items) => {
             />
           </li>
         </ul>
-        <nav v-if="pageCount > 1" class="files-pager" aria-label="文件清单翻页" data-test="admin-files-pager">
+        <!-- Always visible: the pager is part of the panel frame, not something that
+             appears only when there are several pages. -->
+        <nav class="files-pager" aria-label="文件清单翻页" data-test="admin-files-pager">
           <p class="pager-info">
-            共 {{ searched.length }} 个文件，第 {{ page }} / {{ pageCount }} 页
+            共 {{ searched.length }} 个文件<template v-if="pageCount > 1">，第 {{ page }} / {{ pageCount }} 页</template>
           </p>
           <div class="pager-controls">
             <button
@@ -350,15 +352,22 @@ watch(() => props.items, (items) => {
 .files-search input { inline-size: 100%; }
 .files-more { display: flex; justify-content: center; padding-block: 1.2rem 0; }
 /* The list occupies a bounded area and the pager is pinned to its bottom, so the
-   page itself never grows and the controls stay where the eye expects them. */
+   page itself never grows and the controls stay where the eye expects them. The
+   height is capped against the viewport minus the space already used above, so the
+   pager can never be pushed off screen. */
 #admin-files-content {
   display: flex;
   flex-direction: column;
-  max-block-size: min(64vh, 40rem);
+  block-size: clamp(18rem, calc(100vh - 24rem), 46rem);
+  min-block-size: 18rem;
+  max-block-size: 46rem;
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
   background: var(--bg-card);
   overflow: hidden;
+}
+@media (max-height: 48rem) {
+  #admin-files-content { block-size: clamp(14rem, calc(100vh - 20rem), 32rem); }
 }
 #admin-files-content .files-search { flex: none; margin: 0; padding: 0.55rem 0.7rem; border-block-end: 1px solid var(--border); }
 #admin-files-content .files-empty { flex: 1; margin: 0; padding: 1.6rem 0.9rem; }

@@ -92,6 +92,15 @@ const draft = reactive<{
 })
 
 const selectedTitle = computed(() => props.titles.find(title => title.id === draft.titleId))
+// The optional block opens by itself when this title already has that information,
+// so editing existing metadata never hides it behind a click. Once the user toggles
+// it, their choice wins.
+const hasExtraMetadata = computed(() => Boolean(
+  draft.originalTitle || draft.region || draft.genresText || draft.director
+  || (draft.rating !== '' && draft.rating !== null),
+))
+const moreToggled = ref<boolean | null>(null)
+const moreOpen = computed(() => moreToggled.value ?? hasExtraMetadata.value)
 const slot = computed(() => {
   if (!draft.titleId) return null
   if (draft.kind === 'movie') return { titleId: draft.titleId, season: null, episode: null }
@@ -420,6 +429,10 @@ onBeforeUnmount(() => {
           </p>
         </div>
 
+        <div class="editor-field">
+          <label for="admin-media-title">片名</label>
+          <input id="admin-media-title" v-model="draft.title" class="field" type="text" required maxlength="200" data-test="admin-media-title">
+        </div>
         <div class="editor-line">
           <div class="editor-field">
             <label for="admin-media-kind">类型</label>
@@ -434,47 +447,49 @@ onBeforeUnmount(() => {
           </div>
         </div>
         <div class="editor-field">
-          <label for="admin-media-title">片名</label>
-          <input id="admin-media-title" v-model="draft.title" class="field" type="text" required maxlength="200" data-test="admin-media-title">
-        </div>
-        <div class="editor-line">
-          <div class="editor-field">
-            <label for="admin-media-original-title">原名 <span>（可选）</span></label>
-            <input id="admin-media-original-title" v-model="draft.originalTitle" class="field" type="text" maxlength="200" placeholder="例如英文原名" data-test="admin-media-original-title">
-          </div>
-          <div class="editor-field">
-            <label for="admin-media-region">地区 <span>（可选）</span></label>
-            <input id="admin-media-region" v-model="draft.region" class="field" type="text" maxlength="40" placeholder="例如 中国大陆" data-test="admin-media-region">
-          </div>
-        </div>
-        <div class="editor-field">
-          <label for="admin-media-genres">类型 <span>（可选，用、分隔）</span></label>
-          <input id="admin-media-genres" v-model="draft.genresText" class="field" type="text" maxlength="400" placeholder="例如 剧情、科幻" data-test="admin-media-genres">
-        </div>
-        <div class="editor-line">
-          <div class="editor-field">
-            <label for="admin-media-rating">评分 <span>（0–10）</span></label>
-            <input id="admin-media-rating" v-model.number="draft.rating" class="field" type="number" min="0" max="10" step="0.1" inputmode="decimal" placeholder="未知可留空" data-test="admin-media-rating">
-          </div>
-          <div class="editor-field">
-            <label for="admin-media-runtime">片长 <span>（分钟）</span></label>
-            <input id="admin-media-runtime" v-model.number="draft.runtime" class="field" type="number" min="0" max="1440" step="1" inputmode="numeric" placeholder="未知可留空" data-test="admin-media-runtime">
-          </div>
-        </div>
-        <div class="editor-line">
-          <div class="editor-field">
-            <label for="admin-media-director">导演 <span>（可选）</span></label>
-            <input id="admin-media-director" v-model="draft.director" class="field" type="text" maxlength="120" data-test="admin-media-director">
-          </div>
-          <div class="editor-field">
-            <label for="admin-media-cast">主演 <span>（可选，用、分隔）</span></label>
-            <input id="admin-media-cast" v-model="draft.castText" class="field" type="text" maxlength="400" data-test="admin-media-cast">
-          </div>
+          <label for="admin-media-cast">主演 <span>（可选，用、分隔）</span></label>
+          <input id="admin-media-cast" v-model="draft.castText" class="field" type="text" maxlength="400" placeholder="也可以直接把文件名写成 演员-片名-标识" data-test="admin-media-cast">
         </div>
         <div class="editor-field">
           <label for="admin-media-description">简介 <span>（可选）</span></label>
-          <textarea id="admin-media-description" v-model="draft.description" class="field" rows="4" maxlength="6000" data-test="admin-media-description" />
+          <textarea id="admin-media-description" v-model="draft.description" class="field" rows="3" maxlength="6000" data-test="admin-media-description" />
         </div>
+
+        <!-- The rarely used fields stay available but out of the way, so the
+             common case is a short form instead of a dozen inputs. -->
+        <details class="editor-more" :open="moreOpen" data-test="admin-media-more" @toggle="moreToggled = ($event.target as HTMLDetailsElement).open">
+          <summary>更多资料<span class="editor-more-hint">原名、地区、类型标签、评分、片长、导演</span></summary>
+          <div class="editor-more-body">
+            <div class="editor-line">
+              <div class="editor-field">
+                <label for="admin-media-original-title">原名 <span>（可选）</span></label>
+                <input id="admin-media-original-title" v-model="draft.originalTitle" class="field" type="text" maxlength="200" placeholder="例如英文原名" data-test="admin-media-original-title">
+              </div>
+              <div class="editor-field">
+                <label for="admin-media-region">地区 <span>（可选）</span></label>
+                <input id="admin-media-region" v-model="draft.region" class="field" type="text" maxlength="40" placeholder="例如 中国大陆" data-test="admin-media-region">
+              </div>
+            </div>
+            <div class="editor-field">
+              <label for="admin-media-genres">类型标签 <span>（可选，用、分隔）</span></label>
+              <input id="admin-media-genres" v-model="draft.genresText" class="field" type="text" maxlength="400" placeholder="例如 剧情、科幻" data-test="admin-media-genres">
+            </div>
+            <div class="editor-line">
+              <div class="editor-field">
+                <label for="admin-media-rating">评分 <span>（0–10）</span></label>
+                <input id="admin-media-rating" v-model.number="draft.rating" class="field" type="number" min="0" max="10" step="0.1" inputmode="decimal" placeholder="未知可留空" data-test="admin-media-rating">
+              </div>
+              <div class="editor-field">
+                <label for="admin-media-runtime">片长 <span>（分钟，已自动识别）</span></label>
+                <input id="admin-media-runtime" v-model.number="draft.runtime" class="field" type="number" min="0" max="1440" step="1" inputmode="numeric" placeholder="已自动识别" data-test="admin-media-runtime">
+              </div>
+            </div>
+            <div class="editor-field">
+              <label for="admin-media-director">导演 <span>（可选）</span></label>
+              <input id="admin-media-director" v-model="draft.director" class="field" type="text" maxlength="120" data-test="admin-media-director">
+            </div>
+          </div>
+        </details>
 
         <section v-if="draft.kind === 'series'" class="editor-subgroup" aria-labelledby="admin-episode-title">
           <h5 id="admin-episode-title">单集资料</h5>
@@ -668,13 +683,42 @@ onBeforeUnmount(() => {
   padding-top: 1.1rem;
   border-top: 1px solid var(--border);
 }
+/* Optional metadata: collapsed by default so the common case stays short. */
+.editor-more {
+  padding-block-start: 0.55rem;
+  border-block-start: 1px solid var(--border);
+}
+.editor-more summary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.5rem;
+  padding-block: 0.45rem;
+  color: var(--text-secondary);
+  font-size: 0.88rem;
+  font-weight: 600;
+  cursor: pointer;
+  list-style: none;
+}
+.editor-more summary::-webkit-details-marker { display: none; }
+.editor-more summary::before {
+  content: '＋';
+  color: var(--text-muted);
+  font-weight: 400;
+}
+.editor-more[open] summary::before { content: '－'; }
+.editor-more summary:hover { color: var(--text); }
+.editor-more summary:focus-visible { outline: 2px solid var(--accent-strong); outline-offset: 2px; }
+.editor-more-hint { color: var(--text-muted); font-size: 0.78rem; font-weight: 400; }
+.editor-more-body { display: grid; gap: 0.85rem; padding-block: 0.35rem 0.2rem; }
+.editor-field textarea { min-height: 5.5rem; resize: vertical; }
 .editor-subgroup h5,
 .conflict-panel h5 { font-size: 0.95rem; font-weight: 650; }
 .editor-field { gap: 0.4rem; }
 .editor-field label { font-weight: 600; font-size: 0.9rem; }
 .editor-field label span { color: var(--text-muted); font-size: 0.85em; font-weight: 400; }
 .editor-field .field { background: var(--bg); }
-.editor-field textarea { min-height: 7rem; resize: vertical; }
+.editor-field textarea { min-height: 4.5rem; resize: vertical; }
 .editor-line {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
