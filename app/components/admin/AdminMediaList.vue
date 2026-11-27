@@ -46,6 +46,12 @@ function linkedTitle(item: AdminMedia) {
   return `${title.title} · 第 ${item.season} 季 / 第 ${item.episode} 集${item.episodeTitle ? ` · ${item.episodeTitle}` : ''}`
 }
 
+// The runtime is detected from the file header, so it is shown next to the size.
+function linkedRuntime(item: AdminMedia): string {
+  const title = item.titleId ? titlesById.value.get(item.titleId) : null
+  return title?.runtime ? `${title.runtime} 分钟` : ''
+}
+
 const rows = computed(() => props.items
   .filter(item => item.id === editingId.value || matchesFilter(item, filter.value))
   .map(item => ({ item, linked: linkedTitle(item) })))
@@ -172,13 +178,16 @@ watch(() => props.items, (items) => {
             <div class="file-summary">
               <div class="file-copy">
                 <h3 class="file-name" data-test="admin-media-filename">{{ item.fileName }}</h3>
-                <p class="file-path"><span class="visually-hidden">相对路径：</span>{{ item.relativePath }}</p>
+                <!-- Only show the path when it adds information; for a flat upload
+                     it repeats the filename. -->
+                <p v-if="item.relativePath !== item.fileName" class="file-path"><span class="visually-hidden">相对路径：</span>{{ item.relativePath }}</p>
                 <div class="file-meta">
                   <span class="file-tag" :class="{ 'file-tag--pending': item.state === 'pending' }">
                     {{ item.state === 'pending' ? '待整理' : '已发布' }}
                   </span>
                   <span v-if="!item.available" class="file-tag file-tag--missing">缺失／不可用</span>
                   <span>{{ formatAdminBytes(item.size) }}</span>
+                  <span v-if="linkedRuntime(item)" data-test="admin-media-runtime">{{ linkedRuntime(item) }}</span>
                   <span>来源：{{ item.source === 'scan' ? '扫描' : '上传' }}</span>
                 </div>
                 <p v-if="linked" class="file-linkage">关联：{{ linked }}</p>
@@ -296,40 +305,53 @@ watch(() => props.items, (items) => {
   list-style: none;
 }
 .file-row {
-  padding-block: 1.35rem;
+  padding-block: 0.7rem;
   border-block-end: 1px solid var(--border);
 }
 .file-summary {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
-  align-items: start;
-  gap: 0.9rem 2rem;
+  align-items: center;
+  gap: 0.6rem 1.5rem;
 }
+/* One compact line per file: name, then status and size, so a long list stays
+   scannable instead of becoming a column of tall blocks. */
+.file-copy { min-inline-size: 0; }
 .file-name, .file-path, .file-linkage, .file-reason {
   min-width: 0;
   overflow-wrap: anywhere;
 }
 .file-name {
-  font-size: 1rem;
-  font-weight: 650;
+  display: inline;
+  font-size: 0.95rem;
+  font-weight: 600;
+  line-height: 1.45;
+}
+.file-path {
+  display: inline;
+  margin-inline-start: 0.6rem;
+  color: var(--text-muted);
+  font-size: 0.8rem;
+  font-weight: 400;
+}
+.file-path:empty { display: none; }
+.file-path, .file-linkage, .file-reason {
+  margin-top: 0;
+  color: var(--text-muted);
+  font-size: 0.8rem;
   line-height: 1.55;
 }
-.file-path, .file-linkage, .file-reason {
-  margin-top: 0.35rem;
-  color: var(--text-muted);
-  font-size: 0.86rem;
-  line-height: 1.65;
-}
-.file-reason { white-space: pre-wrap; }
+.file-linkage { display: inline; margin-inline-start: 0.6rem; }
+.file-reason { display: block; margin-top: 0.3rem; white-space: pre-wrap; }
 .file-reason strong { color: var(--text-secondary); }
 .file-meta {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 0.45rem 1.15rem;
-  margin-top: 0.75rem;
+  gap: 0.35rem 0.9rem;
+  margin-top: 0.25rem;
   color: var(--text-muted);
-  font-size: 0.82rem;
+  font-size: 0.78rem;
 }
 .file-tag {
   display: inline-flex;

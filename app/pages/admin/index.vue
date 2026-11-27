@@ -161,17 +161,26 @@ async function startScan() {
   }
 }
 
+// Result messages are transient: they used to stay forever and push the list down.
+let noticeTimer: ReturnType<typeof setTimeout> | undefined
+function announce(message: string) {
+  notice.value = message
+  if (noticeTimer !== undefined) clearTimeout(noticeTimer)
+  noticeTimer = setTimeout(() => { notice.value = '' }, 6000)
+}
+onBeforeUnmount(() => { if (noticeTimer !== undefined) clearTimeout(noticeTimer) })
+
 function onSaved(item: AdminMedia) {
-  notice.value = item.state === 'published' && item.available
+  announce(item.state === 'published' && item.available
     ? `已保存并发布：${item.fileName}`
-    : `已保存：${item.fileName}`
+    : `已保存：${item.fileName}`)
   void refreshLibrary()
 }
 
 function onBulkPublished(result: BulkEditResult) {
-  notice.value = result.skipped.length
+  announce(result.skipped.length
     ? `批量发布完成：${result.published.length} 个已发布，${result.skipped.length} 个待手动整理。`
-    : `批量发布完成：${result.published.length} 个已发布。`
+    : `批量发布完成：${result.published.length} 个已发布。`)
   void refreshLibrary()
 }
 
@@ -392,11 +401,27 @@ onBeforeUnmount(() => {
   color: var(--color-danger, var(--accent-strong));
 }
 .admin-error, .admin-notice { overflow-wrap: anywhere; }
+/* A result message is a short-lived banner pinned to the bottom edge, so it never
+   pushes the file list down no matter how many rows are on screen. */
 .admin-notice:not(:empty) {
-  margin-block: 1rem 0;
-  padding: 0.65rem 0 0.65rem 1rem;
-  border-inline-start: 2px solid var(--accent);
+  position: fixed;
+  z-index: 40;
+  inset-inline: 1rem;
+  inset-block-end: 1.25rem;
+  max-inline-size: 34rem;
+  margin-inline: auto;
+  padding: 0.75rem 1.1rem;
+  border: 1px solid var(--border-strong);
+  border-inline-start: 3px solid var(--accent);
+  border-radius: var(--radius-sm);
+  background: var(--bg-elevated);
+  box-shadow: var(--shadow-pop);
   color: var(--text-secondary);
+  font-size: 0.86rem;
+  animation: notice-in var(--dur) var(--ease);
+}
+@keyframes notice-in {
+  from { opacity: 0; transform: translateY(0.5rem); }
 }
 .admin-notice:empty {
   position: absolute;
