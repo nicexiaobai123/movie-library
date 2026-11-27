@@ -68,7 +68,29 @@ test('admin notices overlay the list and one row stays compact', { timeout: 180_
 
     const rowHeight = await page.locator('[data-test="admin-media-row"]').first().evaluate(node => Math.round(node.getBoundingClientRect().height))
     console.log('row height:', rowHeight, 'px')
-    assert.ok(rowHeight <= 110, `one row should stay compact, got ${rowHeight}px`)
+    assert.ok(rowHeight <= 120, `one row should stay compact, got ${rowHeight}px`)
+
+    // Each row carries a poster slot, so the list can be scanned by artwork.
+    const rowShape = await page.evaluate(() => {
+      const row = document.querySelector('[data-test="admin-media-row"]')
+      const thumb = row.querySelector('.file-thumb')
+      const name = row.querySelector('.file-name')
+      const meta = row.querySelector('.file-meta')
+      const edit = row.querySelector('[data-test="admin-media-edit"]')
+      const rowRect = row.getBoundingClientRect()
+      const editRect = edit.getBoundingClientRect()
+      return {
+        hasThumb: Boolean(thumb),
+        thumbInRow: thumb ? thumb.getBoundingClientRect().right <= name.getBoundingClientRect().left + 1 : false,
+        hasMeta: Boolean(meta),
+        editInside: editRect.bottom <= rowRect.bottom + 1 && editRect.top >= rowRect.top - 1,
+      }
+    })
+    console.log('row shape:', JSON.stringify(rowShape))
+    assert.ok(rowShape.hasThumb, 'a row should show a poster slot')
+    assert.ok(rowShape.thumbInRow, 'the poster sits left of the filename')
+    assert.ok(rowShape.hasMeta, 'a row should show its metadata line')
+    assert.ok(rowShape.editInside, 'the edit button stays inside the row')
 
     const runtimes = await page.locator('[data-test="admin-media-runtime"]').allTextContents()
     console.log('runtimes shown:', runtimes.join(', '))

@@ -52,6 +52,29 @@ function linkedRuntime(item: AdminMedia): string {
   return title?.runtime ? `${title.runtime} 分钟` : ''
 }
 
+// Poster and summary come from the linked title, so a row can be recognised at a
+// glance instead of only by its filename.
+function linkedPoster(item: AdminMedia): string | null {
+  const title = item.titleId ? titlesById.value.get(item.titleId) : null
+  return title?.posterUrl ?? null
+}
+
+function linkedFacts(item: AdminMedia): string[] {
+  const title = item.titleId ? titlesById.value.get(item.titleId) : null
+  if (!title) return []
+  const facts: string[] = []
+  if (title.year) facts.push(String(title.year))
+  if (title.genres.length) facts.push(title.genres.slice(0, 2).join('、'))
+  if (title.rating !== null) facts.push(`${title.rating} 分`)
+  return facts
+}
+
+// The monogram prefers the title's first character; the filename is a fallback.
+function monogram(item: AdminMedia, linked: string): string {
+  const source = linked.split(' · ')[0] || item.fileName
+  return Array.from(source.trim())[0] ?? '?'
+}
+
 const rows = computed(() => props.items
   .filter(item => item.id === editingId.value || matchesFilter(item, filter.value))
   .map(item => ({ item, linked: linkedTitle(item) })))
@@ -199,6 +222,12 @@ watch(() => props.items, (items) => {
         <ul v-else class="file-list" role="list" aria-label="视频文件">
           <li v-for="{ item, linked } in visibleRows" :key="item.id" class="file-row" :data-media-id="item.id" data-test="admin-media-row">
             <div class="file-summary">
+              <!-- A small poster makes a long list scannable by artwork, falling back
+                   to a monogram when the title has no cover yet. -->
+              <span class="file-thumb" :class="{ 'file-thumb--empty': !linkedPoster(item) }" aria-hidden="true">
+                <img v-if="linkedPoster(item)" :src="linkedPoster(item) ?? ''" alt="" loading="lazy" decoding="async">
+                <template v-else>{{ monogram(item, linked) }}</template>
+              </span>
               <div class="file-copy">
                 <h3 class="file-name" data-test="admin-media-filename">{{ item.fileName }}</h3>
                 <!-- Only show the path when it adds information; for a flat upload
@@ -209,11 +238,14 @@ watch(() => props.items, (items) => {
                     {{ item.state === 'pending' ? '待整理' : '已发布' }}
                   </span>
                   <span v-if="!item.available" class="file-tag file-tag--missing">缺失／不可用</span>
-                  <span>{{ formatAdminBytes(item.size) }}</span>
                   <span v-if="linkedRuntime(item)" data-test="admin-media-runtime">{{ linkedRuntime(item) }}</span>
-                  <span>来源：{{ item.source === 'scan' ? '扫描' : '上传' }}</span>
+                  <span>{{ formatAdminBytes(item.size) }}</span>
+                  <span v-for="fact in linkedFacts(item)" :key="fact" class="file-fact">{{ fact }}</span>
+                  <span class="file-source">来源：{{ item.source === 'scan' ? '扫描' : '上传' }}</span>
                 </div>
-                <p v-if="linked" class="file-linkage">关联：{{ linked }}</p>
+                <p v-if="linked" class="file-linkage">
+                  <span class="file-linkage-label">关联</span>{{ linked }}
+                </p>
                 <p v-if="item.reason" class="file-reason" data-test="admin-media-reason"><strong>原因：</strong>{{ item.reason }}</p>
               </div>
               <button
@@ -423,9 +455,9 @@ watch(() => props.items, (items) => {
 }
 .file-row {
   /* A fixed height keeps the panel the same size on every page, so the pager never
-     jumps around and the document does not grow with the row count. Three text
-     lines (name / status / linkage) must fit, or content would overlap the button. */
-  block-size: 4.6rem;
+     jumps around and the document does not grow with the row count. The row holds a
+     thumb plus three text lines, or content would overlap the button. */
+  block-size: 5.2rem;
   display: flex;
   align-items: center;
   padding-block: 0;
@@ -434,11 +466,26 @@ watch(() => props.items, (items) => {
 }
 .file-summary {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-columns: auto minmax(0, 1fr) auto;
   align-items: center;
-  gap: 0.6rem 1.5rem;
+  gap: 0.6rem 0.85rem;
   inline-size: 100%;
 }
+/* Small poster so a long list can be scanned by artwork. */
+.file-thumb {
+  display: grid;
+  place-items: center;
+  inline-size: 2.2rem;
+  block-size: 3.1rem;
+  border-radius: var(--radius-sm);
+  background: linear-gradient(160deg, var(--bg-hover), var(--bg-card));
+  color: var(--text-muted);
+  font-size: 0.9rem;
+  font-weight: 600;
+  overflow: hidden;
+}
+.file-thumb img { inline-size: 100%; block-size: 100%; object-fit: cover; }
+.file-thumb--empty { border: 1px solid var(--border); }
 /* One compact line per file: name, then status and size, so a long list stays
    scannable instead of becoming a column of tall blocks. */
 .file-copy { min-inline-size: 0; }
@@ -473,12 +520,22 @@ watch(() => props.items, (items) => {
 }
 .file-linkage {
   display: inline;
-  margin-inline-start: 0.6rem;
+  margin-inline-start: 0;
   padding-block-start: 0.2rem;
   overflow: hidden;
   white-space: nowrap;
   text-overflow: ellipsis;
   vertical-align: bottom;
+  color: var(--text-secondary);
+}
+/* A quiet label keeps the linked title readable without repeating "关联：". */
+.file-linkage-label {
+  margin-inline-end: 0.45rem;
+  padding: 0.05rem 0.4rem;
+  border-radius: var(--radius-pill);
+  background: var(--bg-hover);
+  color: var(--text-muted);
+  font-size: 0.72rem;
 }
 .file-reason { display: block; margin-top: 0.15rem; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 .file-reason strong { color: var(--text-secondary); }
@@ -486,13 +543,16 @@ watch(() => props.items, (items) => {
   display: flex;
   flex-wrap: nowrap;
   align-items: center;
-  gap: 0.35rem 0.9rem;
+  gap: 0.35rem 0.75rem;
   margin-top: 0.3rem;
   overflow: hidden;
   color: var(--text-muted);
   font-size: 0.78rem;
   white-space: nowrap;
 }
+/* Metadata that describes the film rather than the file is quieter still. */
+.file-fact { color: var(--text-secondary); }
+.file-source { opacity: 0.75; }
 .file-tag {
   display: inline-flex;
   align-items: center;
@@ -516,7 +576,8 @@ watch(() => props.items, (items) => {
 @media (max-width: 33rem) {
   /* The button drops below the text on narrow screens, so the row needs more room. */
   .file-row { block-size: auto; padding-block: 0.7rem; align-items: stretch; overflow: visible; }
-  .file-summary { grid-template-columns: minmax(0, 1fr); }
-  .file-edit { justify-self: start; margin-block-start: 0.5rem; }
+  .file-summary { grid-template-columns: auto minmax(0, 1fr); }
+  .file-edit { grid-column: 1 / -1; justify-self: start; margin-block-start: 0.5rem; }
+  .file-thumb { inline-size: 2.2rem; block-size: 3rem; }
 }
 </style>
