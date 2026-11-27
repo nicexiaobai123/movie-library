@@ -325,6 +325,9 @@ onBeforeUnmount(() => {
 .admin-page {
   display: flex;
   flex-direction: column;
+  /* Row gap is the simplest way to keep breathing room between the page bands; the
+     panels themselves stay flush so their internal padding is not doubled. */
+  gap: clamp(1.1rem, 2.2vw, 1.6rem);
   flex: 1 1 auto;
   min-block-size: 0;
 }
@@ -345,13 +348,14 @@ onBeforeUnmount(() => {
 :global(.site:has(#admin-panel-files)) :global(.footer) { margin-block-start: 0; }
 /* The admin area is wider than the reading column so the file list has room for its
    metadata, but still keeps the shell's side padding. */
-.admin-page > * { max-inline-size: 92rem; }.admin-heading {
+.admin-page > * { max-inline-size: 92rem; }
+.admin-heading {
   display: flex;
   align-items: flex-end;
   justify-content: space-between;
   flex-wrap: wrap;
-  gap: 0.75rem 2rem;
-  padding-block-end: clamp(1rem, 2.4vw, 1.6rem);
+  gap: 0.9rem 2rem;
+  padding-block-end: clamp(1.2rem, 2.6vw, 1.9rem);
 }
 /* The copy block shrinks instead of forcing the title under the logout button. */
 .admin-heading > div { min-inline-size: 0; }

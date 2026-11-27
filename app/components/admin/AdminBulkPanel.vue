@@ -182,11 +182,9 @@ async function saveDefault() {
 
 <template>
   <section class="bulk-panel" aria-label="批量处理">
-    <header class="bulk-heading">
-      <!-- The tab already names this panel; only the explanation is worth keeping. -->
-      <h2 id="admin-bulk-title" class="visually-hidden">批量处理</h2>
-      <p>一次补齐简介和封面，或把待整理的文件按文件名推测的资料发布。每一项单独提交，个别失败不影响其余文件。</p>
-    </header>
+    <!-- The tab already names this panel, and the two mode buttons explain
+         themselves, so no intro paragraph is needed. -->
+    <h2 id="admin-bulk-title" class="visually-hidden">批量处理</h2>
 
     <div class="bulk-modes" role="radiogroup" aria-label="批量处理方式">
       <button
@@ -213,7 +211,7 @@ async function saveDefault() {
     <template v-else>
       <div v-if="mode === 'complete' && missingPoster.length" class="bulk-hint" data-test="admin-bulk-missing-poster">
         <p class="bulk-hint-text">
-          有 <strong>{{ missingPoster.length }}</strong> 部已发布影片还没有封面，片库页面会显示占位图。勾选下方文件并执行，即可用视频第一帧补上封面。
+          <strong>{{ missingPoster.length }}</strong> 部影片还没有封面，会显示占位图。勾选后执行即可用视频第一帧补上。
         </p>
         <button class="btn btn--ghost bulk-hint-action" type="button" :disabled="publishing || disabled" data-test="admin-bulk-select-missing" @click="selectMissingPosters">
           只选缺封面的（{{ missingPoster.length }}）
@@ -311,16 +309,9 @@ async function saveDefault() {
 <style scoped>
 .bulk-panel {
   min-width: 0;
-  padding-block: clamp(1.6rem, 3vw, 2.4rem);
+  padding-block: clamp(1.1rem, 2vw, 1.5rem);
   border-block-end: 1px solid var(--border);
 }
-.bulk-heading h2 {
-  font-family: var(--font-display);
-  font-size: 1.3rem;
-  font-weight: 600;
-  line-height: 1.4;
-}
-.bulk-heading p,
 .bulk-empty,
 .bulk-hint {
   margin-block-start: 0.4rem;

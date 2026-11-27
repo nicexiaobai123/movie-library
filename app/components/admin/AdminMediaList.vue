@@ -358,7 +358,8 @@ watch(() => props.items, (items) => {
   display: flex;
   flex-wrap: wrap;
   gap: 0 1.7rem;
-  margin-block: 1rem 0;
+  margin-block: 1.35rem 0;
+  padding-block-end: 0.9rem;
   border-block-end: 1px solid var(--border);
 }
 .filter-button {
@@ -408,6 +409,8 @@ watch(() => props.items, (items) => {
   display: flex;
   flex-direction: column;
   flex: none;
+  /* Breathing room below the filter strip, which carries its own bottom rule. */
+  margin-block-start: 1.35rem;
   /* A tall default: about ten rows on a laptop and more on a large screen. It may
      exceed the viewport, and scrolling the page is preferable to a cramped list. */
   block-size: clamp(30rem, calc(100vh - 11rem), 62rem);
