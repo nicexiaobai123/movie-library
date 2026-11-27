@@ -109,9 +109,7 @@ const rating = computed(() => detail.value?.rating ? detail.value.rating.toFixed
             </NuxtLink>
             <span v-else class="detail-unavailable">源文件暂不可用</span>
             <FavoriteButton class="detail-favorite" />
-          </div>
-
-          <dl v-if="detail.director || detail.cast.length" class="detail-credits">
+          </div>          <dl v-if="detail.director || detail.cast.length" class="detail-credits">
             <div v-if="detail.director">
               <dt>导演</dt>
               <dd>{{ detail.director }}</dd>
@@ -183,8 +181,25 @@ const rating = computed(() => detail.value?.rating ? detail.value.rating.toFixed
 .detail-overview { max-inline-size: 60ch; margin: 0.2rem 0 0; color: var(--text-secondary); font-size: 0.95rem; line-height: 1.85; text-wrap: pretty; }
 .detail-overview--empty { color: var(--text-muted); }
 .detail-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 0.7rem; margin-block-start: 0.5rem; }
-.detail-btn { min-block-size: 46px; padding-inline: 1.4rem; }
+/* The favourite section holds a button plus an optional hint. Only the button
+   belongs on this row, so the section is flattened into the flex container and
+   the hint forces its own line underneath. */
+.detail-actions :deep(.detail-favorite) {
+  display: contents;
+}
+/* Both controls are given the same box so they read as one row. */
+.detail-btn,
+.detail-actions :deep(.detail-favorite .btn) {
+  min-block-size: 46px;
+  padding-inline: 1.4rem;
+  font-size: 0.92rem;
+}
 .detail-btn svg { inline-size: 1rem; block-size: 1rem; }
+.detail-actions :deep(.favorite-note),
+.detail-actions :deep(.favorite-error) {
+  flex-basis: 100%;
+  margin: 0.4rem 0 0;
+}
 .detail-unavailable { color: var(--text-muted); font-size: 0.85rem; }
 .detail-credits { display: grid; gap: 0.4rem; margin: 0.7rem 0 0; padding-block-start: 1rem; border-block-start: 1px solid var(--border); }
 .detail-credits div { display: grid; grid-template-columns: 3.2rem minmax(0, 1fr); gap: 0.7rem; }
