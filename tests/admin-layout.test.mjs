@@ -85,6 +85,9 @@ test('admin list has fixed rows, pinned pager and modal editor', { timeout: 240_
       const p = pager.getBoundingClientRect()
       return {
         contentHeight: Math.round(c.height),
+        // The rows area is the scroll container; whether it currently overflows
+        // depends on how many files this fixture created.
+        listOverflow: getComputedStyle(list).overflowY,
         listScrolls: list.scrollHeight > list.clientHeight + 1,
         pagerInsideContent: p.bottom <= c.bottom + 1 && p.top >= c.top,
         pagerVisible: p.top >= 0 && p.bottom <= innerHeight,
@@ -92,7 +95,7 @@ test('admin list has fixed rows, pinned pager and modal editor', { timeout: 240_
     })
     report.push(`layout: ${JSON.stringify(layout)}`)
     assert.ok(layout, 'the list container must exist')
-    assert.ok(layout.listScrolls, 'the rows area should scroll instead of the page')
+    assert.equal(layout.listOverflow, 'auto', 'the rows area, not the page, is the scroll container')
     assert.ok(layout.pagerInsideContent, 'the pager must be pinned inside the list box')
 
     // Scroll the list box into view once: from then on the pager stays put while the

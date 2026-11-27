@@ -313,12 +313,37 @@ onBeforeUnmount(() => {
 
 <style scoped>
 .admin-page {
-  padding-block: clamp(1.8rem, 4vw, 3.2rem) clamp(1.5rem, 3vw, 2.4rem);
+  padding-block: clamp(1.8rem, 4vw, 3.2rem) 0;
 }
+/* The admin page fills the space between the header and the footer as a column, so
+   the file list can stretch to the bottom instead of stopping at a fixed height. */
+:global(.site-main:has(> .admin-page)) {
+  display: flex;
+  flex-direction: column;
+  min-block-size: 0;
+}
+.admin-page {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-block-size: 0;
+}
+.admin-page > #admin-panel-files {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-block-size: 0;
+}
+/* Children that are not the list keep their natural height. */
+.admin-page > :not(#admin-panel-files):not(.admin-heading):not(.admin-tabs) { flex: none; }
+.admin-heading, .admin-tabs { flex: none; }
+/* A tool page fills the window, so the shared footer gap is closed here only. The
+   trigger keys off the file panel, which is a stable global marker, because this
+   page's own classes are scoped and would not match from here. */
+:global(.site:has(#admin-panel-files)) :global(.footer) { margin-block-start: 0; }
 /* The page is narrower than the shared shell, but keeps the shell's side padding
    so the title lines up with the site header on every width. */
-.admin-page > * { max-inline-size: 78rem; }
-.admin-heading {
+.admin-page > * { max-inline-size: 78rem; }.admin-heading {
   display: flex;
   align-items: flex-end;
   justify-content: space-between;

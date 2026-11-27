@@ -284,7 +284,20 @@ watch(() => props.items, (items) => {
 </template>
 
 <style scoped>
-.files-panel { min-width: 0; }
+/* The panel is a column so its list can take every pixel left over, letting the
+   pager sit on the last line of the page instead of floating mid-screen. */
+.files-panel {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-block-size: 0;
+}
+.files-heading,
+.files-filters,
+.files-error,
+.files-empty { flex: none; }
+.files-panel > #admin-files-content { flex: 1 1 auto; }
 .files-heading {
   display: flex;
   flex-wrap: wrap;
@@ -351,26 +364,20 @@ watch(() => props.items, (items) => {
 .files-search { margin-block-end: 0.6rem; }
 .files-search input { inline-size: 100%; }
 .files-more { display: flex; justify-content: center; padding-block: 1.2rem 0; }
-/* The list occupies a bounded area and the pager is pinned to its bottom, so the
-   page itself never grows and the controls stay where the eye expects them. The
-   reserved space above the list is measured, not guessed: heading, tabs and filters
-   take 350px at this density, plus a little breathing room below the pager. */
+/* The list fills whatever height is left between the filters and the bottom of the
+   page, and the pager is pinned to its last line. `block-size: 0` together with
+   `flex: 1` makes it exactly fill the leftover space instead of growing with its
+   content — without it a long list would stretch the page again. */
 #admin-files-content {
   display: flex;
   flex-direction: column;
   flex: 1 1 auto;
-  block-size: clamp(16rem, calc(100vh - 22.5rem), 60rem);
+  block-size: 0;
   min-block-size: 16rem;
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
   background: var(--bg-card);
   overflow: hidden;
-}
-/* Shorter screens keep the same reserved band as taller ones: the admin chrome
-   above the list is a fixed 350px regardless of viewport height, so shrinking the
-   reservation here would push the pager off screen. Only the floor is relaxed. */
-@media (max-height: 50rem) {
-  #admin-files-content { block-size: clamp(10rem, calc(100vh - 22.5rem), 60rem); }
 }
 #admin-files-content .files-search { flex: none; margin: 0; padding: 0.55rem 0.7rem; border-block-end: 1px solid var(--border); }
 #admin-files-content .files-empty { flex: 1; margin: 0; padding: 1.6rem 0.9rem; }

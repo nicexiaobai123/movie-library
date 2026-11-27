@@ -35,10 +35,11 @@ test('list panel is tall with a permanent pager and a compact editor', { timeout
     await page.locator('[data-test="admin-filter-all"]').click()
     await page.locator('[data-test="admin-media-row"]').first().waitFor()
 
-    // 1. The panel is a bounded, reasonably tall box.
+    // The panel reaches down to the footer; its absolute height depends on how much
+    // chrome sits above it, so the meaningful check is that it ends at the bottom.
     const panel = await page.locator('#admin-files-content').evaluate(node => Math.round(node.getBoundingClientRect().height))
     report.push(`list panel height: ${panel}px`)
-    assert.ok(panel >= 400, `the panel should be tall enough to show many rows, got ${panel}px`)
+    assert.ok(panel >= 200, `the panel should show a few rows, got ${panel}px`)
 
     // 2. The pager is present even with a single page.
     const pager = page.locator('[data-test="admin-files-pager"]')
@@ -61,6 +62,21 @@ test('list panel is tall with a permanent pager and a compact editor', { timeout
     report.push(`pager on screen: ${JSON.stringify(pagerBox)}`)
     assert.ok(pagerBox.pageScroll === 0, 'the page should not need scrolling')
     assert.ok(pagerBox.bottom <= pagerBox.viewport + 1, 'the pager must be inside the viewport')
+
+    // The list must run all the way down to the footer, with no leftover band.
+    const edges = await page.evaluate(() => {
+      const content = document.querySelector('#admin-files-content').getBoundingClientRect()
+      const main = document.querySelector('.site-main').getBoundingClientRect()
+      const footer = document.querySelector('.footer').getBoundingClientRect()
+      return {
+        contentBottom: Math.round(content.bottom + scrollY),
+        mainBottom: Math.round(main.bottom + scrollY),
+        footerTop: Math.round(footer.top + scrollY),
+      }
+    })
+    report.push(`bottom edges: ${JSON.stringify(edges)}`)
+    assert.equal(edges.contentBottom, edges.mainBottom, 'the list must end exactly where the main area ends')
+    assert.ok(edges.footerTop - edges.contentBottom <= 2, `no gap before the footer, got ${edges.footerTop - edges.contentBottom}px`)
     await page.screenshot({ path: '.test-artifacts/admin-tall-list.png', fullPage: false })
 
     // 3. The editor leads with the common fields.
