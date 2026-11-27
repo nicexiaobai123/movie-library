@@ -331,7 +331,9 @@ onBeforeUnmount(() => {
 .admin-page > #admin-panel-files {
   display: flex;
   flex-direction: column;
-  flex: 1 1 auto;
+  /* Grow into spare space but never shrink below the list's own height: a short
+     viewport scrolls the page instead of compressing the file list. */
+  flex: 1 0 auto;
   min-block-size: 0;
 }
 /* Children that are not the list keep their natural height. */

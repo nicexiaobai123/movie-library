@@ -297,7 +297,7 @@ watch(() => props.items, (items) => {
 .files-filters,
 .files-error,
 .files-empty { flex: none; }
-.files-panel > #admin-files-content { flex: 1 1 auto; }
+.files-panel > #admin-files-content { flex: none; }
 .files-heading {
   display: flex;
   flex-wrap: wrap;
@@ -364,16 +364,18 @@ watch(() => props.items, (items) => {
 .files-search { margin-block-end: 0.6rem; }
 .files-search input { inline-size: 100%; }
 .files-more { display: flex; justify-content: center; padding-block: 1.2rem 0; }
-/* The list fills whatever height is left between the filters and the bottom of the
-   page, and the pager is pinned to its last line. `block-size: 0` together with
-   `flex: 1` makes it exactly fill the leftover space instead of growing with its
-   content — without it a long list would stretch the page again. */
+/* The list keeps a generous fixed height instead of being squeezed into whatever
+   is left of the viewport: on a normal screen that is ~8 rows, and when the page
+   cannot fit it the whole page scrolls rather than shrinking the panel. `flex: none`
+   stops a constrained parent from compressing it below the clamp. The pager stays
+   pinned to the panel's last line and the rows scroll inside. */
 #admin-files-content {
   display: flex;
   flex-direction: column;
-  flex: 1 1 auto;
-  block-size: 0;
-  min-block-size: 16rem;
+  flex: none;
+  /* Roughly 8–10 rows on a typical screen, and it may grow past the viewport: the
+     page scrolls when it does, which is better than a cramped list. */
+  block-size: clamp(26rem, calc(100vh - 17rem), 52rem);
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
   background: var(--bg-card);
@@ -423,7 +425,7 @@ watch(() => props.items, (items) => {
   /* A fixed height keeps the panel the same size on every page, so the pager never
      jumps around and the document does not grow with the row count. Three text
      lines (name / status / linkage) must fit, or content would overlap the button. */
-  block-size: 5.2rem;
+  block-size: 4.6rem;
   display: flex;
   align-items: center;
   padding-block: 0;
@@ -451,9 +453,9 @@ watch(() => props.items, (items) => {
   white-space: nowrap;
   text-overflow: ellipsis;
   vertical-align: bottom;
-  font-size: 0.95rem;
+  font-size: 0.92rem;
   font-weight: 600;
-  line-height: 1.45;
+  line-height: 1.35;
 }
 .file-path {
   display: inline;
@@ -472,6 +474,7 @@ watch(() => props.items, (items) => {
 .file-linkage {
   display: inline;
   margin-inline-start: 0.6rem;
+  padding-block-start: 0.2rem;
   overflow: hidden;
   white-space: nowrap;
   text-overflow: ellipsis;
@@ -484,7 +487,7 @@ watch(() => props.items, (items) => {
   flex-wrap: nowrap;
   align-items: center;
   gap: 0.35rem 0.9rem;
-  margin-top: 0.15rem;
+  margin-top: 0.3rem;
   overflow: hidden;
   color: var(--text-muted);
   font-size: 0.78rem;
