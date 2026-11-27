@@ -353,21 +353,24 @@ watch(() => props.items, (items) => {
 .files-more { display: flex; justify-content: center; padding-block: 1.2rem 0; }
 /* The list occupies a bounded area and the pager is pinned to its bottom, so the
    page itself never grows and the controls stay where the eye expects them. The
-   height is capped against the viewport minus the space already used above, so the
-   pager can never be pushed off screen. */
+   reserved space above the list is measured, not guessed: heading, tabs and filters
+   take 350px at this density, plus a little breathing room below the pager. */
 #admin-files-content {
   display: flex;
   flex-direction: column;
-  block-size: clamp(18rem, calc(100vh - 24rem), 46rem);
-  min-block-size: 18rem;
-  max-block-size: 46rem;
+  flex: 1 1 auto;
+  block-size: clamp(16rem, calc(100vh - 22.5rem), 60rem);
+  min-block-size: 16rem;
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
   background: var(--bg-card);
   overflow: hidden;
 }
-@media (max-height: 48rem) {
-  #admin-files-content { block-size: clamp(14rem, calc(100vh - 20rem), 32rem); }
+/* Shorter screens keep the same reserved band as taller ones: the admin chrome
+   above the list is a fixed 350px regardless of viewport height, so shrinking the
+   reservation here would push the pager off screen. Only the floor is relaxed. */
+@media (max-height: 50rem) {
+  #admin-files-content { block-size: clamp(10rem, calc(100vh - 22.5rem), 60rem); }
 }
 #admin-files-content .files-search { flex: none; margin: 0; padding: 0.55rem 0.7rem; border-block-end: 1px solid var(--border); }
 #admin-files-content .files-empty { flex: 1; margin: 0; padding: 1.6rem 0.9rem; }

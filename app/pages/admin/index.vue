@@ -313,7 +313,7 @@ onBeforeUnmount(() => {
 
 <style scoped>
 .admin-page {
-  padding-block: clamp(1.8rem, 4vw, 3.2rem) clamp(3rem, 6vw, 5rem);
+  padding-block: clamp(1.8rem, 4vw, 3.2rem) clamp(1.5rem, 3vw, 2.4rem);
 }
 /* The page is narrower than the shared shell, but keeps the shell's side padding
    so the title lines up with the site header on every width. */
