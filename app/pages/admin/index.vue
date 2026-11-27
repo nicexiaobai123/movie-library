@@ -343,9 +343,9 @@ onBeforeUnmount(() => {
    trigger keys off the file panel, which is a stable global marker, because this
    page's own classes are scoped and would not match from here. */
 :global(.site:has(#admin-panel-files)) :global(.footer) { margin-block-start: 0; }
-/* The page is narrower than the shared shell, but keeps the shell's side padding
-   so the title lines up with the site header on every width. */
-.admin-page > * { max-inline-size: 78rem; }.admin-heading {
+/* The admin area is wider than the reading column so the file list has room for its
+   metadata, but still keeps the shell's side padding. */
+.admin-page > * { max-inline-size: 92rem; }.admin-heading {
   display: flex;
   align-items: flex-end;
   justify-content: space-between;

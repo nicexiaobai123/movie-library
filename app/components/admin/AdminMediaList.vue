@@ -229,19 +229,21 @@ watch(() => props.items, (items) => {
                 <template v-else>{{ monogram(item, linked) }}</template>
               </span>
               <div class="file-copy">
-                <h3 class="file-name" data-test="admin-media-filename">{{ item.fileName }}</h3>
-                <!-- Only show the path when it adds information; for a flat upload
-                     it repeats the filename. -->
-                <p v-if="item.relativePath !== item.fileName" class="file-path"><span class="visually-hidden">相对路径：</span>{{ item.relativePath }}</p>
-                <div class="file-meta">
-                  <span class="file-tag" :class="{ 'file-tag--pending': item.state === 'pending' }">
-                    {{ item.state === 'pending' ? '待整理' : '已发布' }}
-                  </span>
-                  <span v-if="!item.available" class="file-tag file-tag--missing">缺失／不可用</span>
-                  <span v-if="linkedRuntime(item)" data-test="admin-media-runtime">{{ linkedRuntime(item) }}</span>
-                  <span>{{ formatAdminBytes(item.size) }}</span>
-                  <span v-for="fact in linkedFacts(item)" :key="fact" class="file-fact">{{ fact }}</span>
-                  <span class="file-source">来源：{{ item.source === 'scan' ? '扫描' : '上传' }}</span>
+                <div class="file-head">
+                  <h3 class="file-name" data-test="admin-media-filename">{{ item.fileName }}</h3>
+                  <!-- Only show the path when it adds information; for a flat upload
+                       it repeats the filename. -->
+                  <p v-if="item.relativePath !== item.fileName" class="file-path"><span class="visually-hidden">相对路径：</span>{{ item.relativePath }}</p>
+                  <div class="file-meta">
+                    <span class="file-tag" :class="{ 'file-tag--pending': item.state === 'pending' }">
+                      {{ item.state === 'pending' ? '待整理' : '已发布' }}
+                    </span>
+                    <span v-if="!item.available" class="file-tag file-tag--missing">缺失／不可用</span>
+                    <span v-if="linkedRuntime(item)" data-test="admin-media-runtime">{{ linkedRuntime(item) }}</span>
+                    <span>{{ formatAdminBytes(item.size) }}</span>
+                    <span v-for="fact in linkedFacts(item)" :key="fact" class="file-fact">{{ fact }}</span>
+                    <span class="file-source">来源：{{ item.source === 'scan' ? '扫描' : '上传' }}</span>
+                  </div>
                 </div>
                 <p v-if="linked" class="file-linkage">
                   <span class="file-linkage-label">关联</span>{{ linked }}
@@ -405,9 +407,9 @@ watch(() => props.items, (items) => {
   display: flex;
   flex-direction: column;
   flex: none;
-  /* Roughly 8–10 rows on a typical screen, and it may grow past the viewport: the
-     page scrolls when it does, which is better than a cramped list. */
-  block-size: clamp(26rem, calc(100vh - 17rem), 52rem);
+  /* A tall default: about ten rows on a laptop and more on a large screen. It may
+     exceed the viewport, and scrolling the page is preferable to a cramped list. */
+  block-size: clamp(30rem, calc(100vh - 11rem), 62rem);
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
   background: var(--bg-card);
@@ -456,33 +458,57 @@ watch(() => props.items, (items) => {
 .file-row {
   /* A fixed height keeps the panel the same size on every page, so the pager never
      jumps around and the document does not grow with the row count. The row holds a
-     thumb plus three text lines, or content would overlap the button. */
-  block-size: 5.2rem;
+     4rem thumb, so it stays a little taller than the text it carries. */
+  block-size: 4.8rem;
   display: flex;
   align-items: center;
   padding-block: 0;
   border-block-end: 1px solid var(--border);
+  transition: background-color var(--dur-fast) var(--ease);
   overflow: hidden;
 }
+.file-row:hover { background: var(--bg-hover); }
 .file-summary {
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto;
+  /* Poster | text | button. The text column takes all the slack so metadata reads
+     across the row instead of bunching up on the left. */
+  grid-template-columns: 2.8rem minmax(0, 1fr) auto;
   align-items: center;
-  gap: 0.6rem 0.85rem;
+  gap: 0.75rem 1rem;
   inline-size: 100%;
 }
-/* Small poster so a long list can be scanned by artwork. */
+/* A poster-shaped slot so artwork is recognisable at a glance. */
 .file-thumb {
   display: grid;
   place-items: center;
-  inline-size: 2.2rem;
-  block-size: 3.1rem;
+  inline-size: 2.8rem;
+  block-size: 3.6rem;
+  min-inline-size: 2.8rem;
   border-radius: var(--radius-sm);
   background: linear-gradient(160deg, var(--bg-hover), var(--bg-card));
   color: var(--text-muted);
-  font-size: 0.9rem;
+  font-size: 1rem;
   font-weight: 600;
   overflow: hidden;
+}
+.file-thumb img { inline-size: 100%; block-size: 100%; object-fit: cover; }
+.file-thumb--empty { border: 1px solid var(--border); }
+/* Name and metadata share one line; the name yields space first. */
+.file-head {
+  display: flex;
+  align-items: baseline;
+  gap: 0.7rem;
+  min-inline-size: 0;
+}
+.file-name {
+  min-inline-size: 0;
+  max-inline-size: 55%;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-size: 0.95rem;
+  font-weight: 600;
+  line-height: 1.4;
 }
 .file-thumb img { inline-size: 100%; block-size: 100%; object-fit: cover; }
 .file-thumb--empty { border: 1px solid var(--border); }
@@ -500,9 +526,9 @@ watch(() => props.items, (items) => {
   white-space: nowrap;
   text-overflow: ellipsis;
   vertical-align: bottom;
-  font-size: 0.92rem;
+  font-size: 0.95rem;
   font-weight: 600;
-  line-height: 1.35;
+  line-height: 1.4;
 }
 .file-path {
   display: inline;
@@ -543,11 +569,11 @@ watch(() => props.items, (items) => {
   display: flex;
   flex-wrap: nowrap;
   align-items: center;
-  gap: 0.35rem 0.75rem;
-  margin-top: 0.3rem;
+  gap: 0.3rem 0.7rem;
+  margin-top: 0;
   overflow: hidden;
   color: var(--text-muted);
-  font-size: 0.78rem;
+  font-size: 0.79rem;
   white-space: nowrap;
 }
 /* Metadata that describes the film rather than the file is quieter still. */
