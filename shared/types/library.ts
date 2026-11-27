@@ -47,6 +47,7 @@ export interface BrowseQuery {
   kind: LibraryKind | null
   genre: string | null
   region: string | null
+  actor: string | null
   yearFrom: number | null
   yearTo: number | null
   minRating: number | null
@@ -64,6 +65,7 @@ export interface BrowseResult {
     genres: string[]
     regions: string[]
     years: number[]
+    actors: string[]
   }
 }
 
@@ -106,6 +108,8 @@ export interface MediaSuggestion {
   year: number | null
   season: number | null
   episode: number | null
+  // A star parsed out of a `star-title-tag` filename, shown as a hint only.
+  actor: string | null
 }
 
 export interface AdminMedia {
@@ -220,6 +224,22 @@ export interface ContinueWatchingItem extends LibraryCard {
 
 export interface ContinueWatching {
   items: ContinueWatchingItem[]
+}
+
+// One actor plus how many published titles they appear in.
+export interface ActorSummary {
+  name: string
+  count: number
+  posterUrl: string | null
+}
+
+export interface ActorList {
+  items: ActorSummary[]
+}
+
+export interface ActorDetail {
+  name: string
+  titles: LibraryCard[]
 }
 
 export interface ProgressInput {

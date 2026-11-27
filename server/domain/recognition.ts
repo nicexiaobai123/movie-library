@@ -1,8 +1,8 @@
 import type { LibraryKind, MediaSuggestion } from '../../shared/types/library.ts'
 
 export type IdentifiedMedia =
-  | { kind: 'movie'; title: string; year: number | null; season: null; episode: null }
-  | { kind: 'series'; title: string; year: number | null; season: number; episode: number }
+  | { kind: 'movie'; title: string; year: number | null; season: null; episode: null; actor: string | null }
+  | { kind: 'series'; title: string; year: number | null; season: number; episode: number; actor: string | null }
 
 export interface Recognition {
   match: IdentifiedMedia | null
@@ -13,7 +13,27 @@ export interface Recognition {
 const generic = /^(?:电影|影片|电视剧|剧集|连续剧|上传|未分类|视频|样片|新建文件夹|movies?|films?|tv|series|shows?|uploads?|video|media|sample|untitled|temp|tmp)$/i
 const seriesFolder = /^(?:电视剧|剧集|连续剧|tv|series|shows?)$/i
 const commonTag = /[ ._-]+(?:2160p|1080p|720p|480p|4k|web[ ._-]?dl|webrip|blu[ ._-]?ray|h[ ._-]?26[45]|x26[45]|hevc|aac)(?=$|[ ._-])/i
-const emptySuggestion: MediaSuggestion = { kind: null, title: null, year: null, season: null, episode: null }
+const emptySuggestion: MediaSuggestion = { kind: null, title: null, year: null, season: null, episode: null, actor: null }
+
+// `杨幂-古剑奇谭-dx123`: a star, a real title and an opaque release tag, all joined
+// by dashes. Only strictly dash-joined names are split, so ordinary titles that
+// happen to contain a hyphen are left alone. A trailing episode marker is allowed
+// (`杨幂-古剑奇谭-dx123 第02集`), and it stays in `rest` for the caller to parse.
+const castPrefix = /^([^-]{2,40}?)\s*[-–—]\s*([^-]{1,80}?)\s*[-–—]\s*([A-Za-z0-9_.]{2,40})(?=$|\s)/
+
+function splitCast(stem: string): { actor: string | null; rest: string } {
+  const match = stem.match(castPrefix)
+  if (!match) return { actor: null, rest: stem }
+  const actor = match[1] ?? ''
+  const title = match[2] ?? ''
+  const tag = match[3] ?? ''
+  // A trailing tag that is itself a season/episode marker is not a cast prefix.
+  if (/^(?:s\d{1,3}e\d{1,4}|e\d{1,4}|ep\d{1,4})$/i.test(tag)) return { actor: null, rest: stem }
+  if (!actor || !title || generic.test(actor.trim()) || !/[\p{L}]/u.test(actor)) return { actor: null, rest: stem }
+  // Anything after the tag (an episode marker) rejoins the title part to parse.
+  const tail = stem.slice(match[0].length).trim()
+  return { actor: actor.trim(), rest: tail ? `${title.trim()} ${tail}` : title.trim() }
+}
 
 function pending(reason: string, suggestion: Partial<MediaSuggestion> = {}): Recognition {
   return { match: null, reason, suggestion: { ...emptySuggestion, ...suggestion } }
@@ -55,7 +75,11 @@ export function titleIdentity(kind: LibraryKind, title: string, year: number | n
 export function recognize(relativePath: string): Recognition {
   const parts = relativePath.split('/')
   const basename = parts.pop() ?? ''
-  const stem = basename.replace(/\.mp4$/i, '').normalize('NFC').trim()
+  const rawStem = basename.replace(/\.mp4$/i, '').normalize('NFC').trim()
+  // A `star-title-tag` name keeps the star aside and treats the middle part as
+  // the real title, so actor names never leak into film titles.
+  const cast = splitCast(rawStem)
+  const stem = cast.rest
   const folders = parts.map(folder => folder.normalize('NFKC').trim())
   const seasons = folders.map(seasonNumber).filter((season): season is number => season !== null)
   const folderSeason = seasons.at(-1) ?? null
@@ -74,19 +98,19 @@ export function recognize(relativePath: string): Recognition {
     const episode = token ? Number(token[2] ?? token[3]) : Number(stem)
     const nameBefore = token ? stem.slice(0, token.index).trim().replace(/[\s._-]+$/, '') : ''
     const name = readName(nameBefore || folderTitle || '')
-    const suggestion = { kind: 'series' as const, title: name?.title ?? null, year: name?.year ?? null, season, episode: episode || null }
+    const suggestion = { kind: 'series' as const, title: name?.title ?? null, year: name?.year ?? null, season, episode: episode || null, actor: cast.actor }
     if (new Set(seasons).size > 1 || (explicitSeason !== null && folderSeason !== null && explicitSeason !== folderSeason)) {
       return pending('文件名和所在目录的季号冲突。', { ...suggestion, season: null })
     }
     if (episode < 1) return pending('集号必须大于零。', suggestion)
     if (!name) return pending('提取到集号，但无法确定剧名。', suggestion)
-    return found({ kind: 'series', ...name, season, episode })
+    return found({ kind: 'series', ...name, season, episode, actor: cast.actor })
   }
   if (hintedSeries || /(?:^|[\s._-])(?:s\d+|e\d+|ep\d+)(?=$|[\s._-])|第[^\s]{0,8}[集话話]/i.test(stem)) {
     const name = folderTitle ? readName(folderTitle) : null
-    return pending('像是剧集文件，但没有可确认的集号。', { kind: 'series', title: name?.title ?? null, year: name?.year ?? null, season: folderSeason })
+    return pending('像是剧集文件，但没有可确认的集号。', { kind: 'series', title: name?.title ?? null, year: name?.year ?? null, season: folderSeason, actor: cast.actor })
   }
   const name = readName(stem)
   if (!name) return pending('无法从文件名可靠识别片名。')
-  return found({ kind: 'movie', ...name, season: null, episode: null })
+  return found({ kind: 'movie', ...name, season: null, episode: null, actor: cast.actor })
 }

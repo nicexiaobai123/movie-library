@@ -69,7 +69,9 @@ export function indexMedia(
       titleId = existingTitle?.id ?? store.createTitle(match.kind, {
         title: match.title, year: match.year, description: store.setting(defaultDescriptionKey) ?? '', poster_path: null,
         original_title: null, genres: '[]', region: null, rating: null, runtime: null, director: null,
-        cast_members: '[]', backdrop_path: null,
+        // A star parsed from the filename becomes this title's cast, so the actor
+        // tab can find the film without the actor name polluting the title.
+        cast_members: match.actor ? JSON.stringify([match.actor]) : '[]', backdrop_path: null,
       }, identity)
       if (match.kind === 'series') episodeId = existingEpisode?.id ?? store.createEpisode(titleId, match.season, match.episode, null)
     }

@@ -311,6 +311,7 @@ export function createCatalog(store: LibraryStore, config: LibraryConfig) {
 
   return {
     cards: store.cards, browse: store.browse, home: store.home, detail: store.detail,
+    actors: () => ({ items: store.actors() }),
     scanner, video, preview, poster, uploadPoster, uploadVideo, edit, publishMany,
     settings: () => readSettings(store),
     saveSettings: (input: { defaultDescription: string }) => store.transact(() => saveSettings(store, input)),

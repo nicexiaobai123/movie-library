@@ -56,6 +56,7 @@ const browseForm = z.object({  q: text(200).optional(),
   kind: slug.optional(),
   genre: text(40).optional(),
   region: text(40).optional(),
+  actor: text(40).optional(),
   yearFrom: z.int().min(1800).max(2300).optional(),
   yearTo: z.int().min(1800).max(2300).optional(),
   minRating: z.number().min(0).max(10).optional(),
@@ -111,6 +112,9 @@ export function parseBrowseQuery(input: Record<string, unknown>): BrowseQuery {
     kind: typeof input.kind === 'string' ? input.kind : undefined,
     genre: typeof input.genre === 'string' ? input.genre : undefined,
     region: typeof input.region === 'string' ? input.region : undefined,
+    actor: typeof input.actor === 'string' ? input.actor : undefined,
+    // Year filtering is no longer offered in the UI; the range stays supported so
+    // old bookmarked URLs keep working.
     yearFrom: optionalNumber(input.yearFrom, 'yearFrom'),
     yearTo: optionalNumber(input.yearTo, 'yearTo'),
     minRating: optionalNumber(input.minRating, 'minRating'),
@@ -128,6 +132,7 @@ export function parseBrowseQuery(input: Record<string, unknown>): BrowseQuery {
     kind: query.kind ?? null,
     genre: query.genre ?? null,
     region: query.region ?? null,
+    actor: query.actor ?? null,
     yearFrom: query.yearFrom ?? null,
     yearTo: query.yearTo ?? null,
     minRating: query.minRating ?? null,
@@ -135,6 +140,13 @@ export function parseBrowseQuery(input: Record<string, unknown>): BrowseQuery {
     page: query.page ?? 1,
     pageSize: query.pageSize ?? 24,
   }
+}
+
+// An actor name arrives from the URL, so it is length-limited and trimmed.
+export function parseActorName(input: unknown): string {
+  const result = z.string().trim().min(1).max(40).safeParse(input)
+  if (!result.success) throw new LibraryError(400, '演员名称无效。')
+  return result.data
 }
 
 export function parseCatalogQuery(input: unknown) {

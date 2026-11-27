@@ -19,7 +19,7 @@ function readQuery() {
     kind: value('kind') === 'movie' || value('kind') === 'series' ? value('kind') as LibraryKind : '',
     genre: value('genre'),
     region: value('region'),
-    year: value('year'),
+    actor: value('actor'),
     minRating: value('minRating'),
     sort: value('sort') || 'newest',
     page: Math.max(1, Number(value('page')) || 1),
@@ -31,9 +31,10 @@ const filters = computed(readQuery)
 // shows its own kind switch; it just renders whichever kind was asked for.
 const isSeries = computed(() => filters.value.kind === 'series')
 const heading = computed(() => {
+  if (filters.value.actor) return { eyebrow: '明星', title: filters.value.actor, lede: `${filters.value.actor}在片库中的作品。` }
   if (isSeries.value) return { eyebrow: '剧集', title: '剧集', lede: '多集连续播放的作品，按季与集展开。' }
-  if (filters.value.kind === 'movie') return { eyebrow: '电影', title: '电影', lede: '单部作品，按类型、地区、年份和评分浏览。' }
-  return { eyebrow: '片库', title: '全部作品', lede: '按类型、地区、年份和评分浏览整座片库。' }
+  if (filters.value.kind === 'movie') return { eyebrow: '电影', title: '电影', lede: '单部作品，按类型、地区和评分浏览。' }
+  return { eyebrow: '片库', title: '全部作品', lede: '按类型、地区和评分浏览整座片库。' }
 })
 useSeoMeta({
   title: () => `${heading.value.title} · 夜灯`,
@@ -45,8 +46,7 @@ const apiQuery = computed(() => ({
   kind: filters.value.kind || undefined,
   genre: filters.value.genre || undefined,
   region: filters.value.region || undefined,
-  yearFrom: filters.value.year || undefined,
-  yearTo: filters.value.year || undefined,
+  actor: filters.value.actor || undefined,
   minRating: filters.value.minRating || undefined,
   sort: filters.value.sort,
   page: filters.value.page,
@@ -72,11 +72,13 @@ function update(patch: Record<string, string | number | null | undefined>) {
 }
 
 // `kind` belongs to the navigation, not to the filters, so it is not counted.
-const activeCount = computed(() => [filters.value.genre, filters.value.region, filters.value.year, filters.value.minRating]
+const activeCount = computed(() => [filters.value.genre, filters.value.region, filters.value.actor, filters.value.minRating]
   .filter(Boolean).length)
 
 function clearAll() {
-  void router.replace({ path: '/browse', query: filters.value.kind ? { kind: filters.value.kind } : {} })
+  const keep: Record<string, string> = {}
+  if (filters.value.kind) keep.kind = filters.value.kind
+  void router.replace({ path: '/browse', query: keep })
 }
 </script>
 
@@ -141,18 +143,18 @@ function clearAll() {
               >{{ region }}</button>
             </div>
           </fieldset>
-          <fieldset v-if="result.facets.years.length" class="filter-group">
-            <legend>年份</legend>
+          <fieldset v-if="result.facets.actors?.length" class="filter-group">
+            <legend>明星</legend>
             <div class="chips">
-              <button type="button" class="chip" :aria-pressed="!filters.year" @click="update({ year: null, page: null })">全部</button>
+              <button type="button" class="chip" :aria-pressed="!filters.actor" @click="update({ actor: null, page: null })">全部</button>
               <button
-                v-for="year in result.facets.years.slice(0, 12)"
-                :key="year"
+                v-for="actor in result.facets.actors.slice(0, 12)"
+                :key="actor"
                 type="button"
                 class="chip"
-                :aria-pressed="filters.year === String(year)"
-                @click="update({ year, page: null })"
-              >{{ year }}</button>
+                :aria-pressed="filters.actor === actor"
+                @click="update({ actor, page: null })"
+              >{{ actor }}</button>
             </div>
           </fieldset>
         </template>

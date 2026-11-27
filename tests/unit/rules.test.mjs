@@ -4,8 +4,8 @@ import { recognize, titleIdentity } from '../../server/domain/recognition.ts'
 import { byteRange, disposition } from '../../server/http/range.ts'
 import { assertFileName, relativeSegments, videoFileName } from '../../server/storage/paths.ts'
 
-const movie = (title, year = null) => ({ kind: 'movie', title, year, season: null, episode: null })
-const episode = (title, season, episodeNumber) => ({ kind: 'series', title, year: null, season, episode: episodeNumber })
+const movie = (title, year = null, actor = null) => ({ kind: 'movie', title, year, season: null, episode: null, actor })
+const episode = (title, season, episodeNumber, actor = null) => ({ kind: 'series', title, year: null, season, episode: episodeNumber, actor })
 
 test('movie and episode recognition from ordinary Chinese and structured names', () => {
   assert.deepEqual(recognize('电影/远山来信 (2024).mp4').match, movie('远山来信', 2024))
@@ -15,6 +15,18 @@ test('movie and episode recognition from ordinary Chinese and structured names',
   assert.deepEqual(recognize('电视剧/观潮日记/第二季/第02集.mp4').match, episode('观潮日记', 2, 2))
   assert.deepEqual(recognize('剧集/观潮日记/Season 10/02.mp4').match, episode('观潮日记', 10, 2))
   assert.equal(titleIdentity('series', 'Ｆｉｌｍ　Lab', null), titleIdentity('series', 'film lab', null))
+})
+
+test('a star-title-tag filename keeps the star out of the title', () => {
+  // The documented convention: 明星 - 真实片名 - 无意义标识
+  assert.deepEqual(recognize('上传/杨幂-古剑奇谭-dx123.mp4').match, movie('古剑奇谭', null, '杨幂'))
+  assert.deepEqual(recognize('上传/胡歌-琅琊榜-dx456.mp4').match, movie('琅琊榜', null, '胡歌'))
+  // Season/episode markers still work alongside the cast prefix.
+  assert.deepEqual(recognize('杨幂-古剑奇谭-dx123 第02集.mp4').match, episode('古剑奇谭', 1, 2, '杨幂'))
+  // Ordinary titles that merely contain a dash are not treated as cast names.
+  assert.deepEqual(recognize('上传/蜘蛛侠-英雄归来.mp4').match, movie('蜘蛛侠-英雄归来'))
+  // A tag that is itself an episode marker is not a cast prefix.
+  assert.equal(recognize('剧名-S01E02.mp4').match?.title, '剧名')
 })
 
 test('ambiguous names, multi-episode releases and conflicting seasons are not published', () => {

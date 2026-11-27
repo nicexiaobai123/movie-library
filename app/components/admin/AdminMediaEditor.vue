@@ -44,7 +44,8 @@ function titleFields(title?: AdminTitle) {
     rating: (title?.rating ?? '') as OptionalNumber,
     runtime: (title?.runtime ?? '') as OptionalNumber,
     director: title?.director ?? '',
-    castText: (title?.cast ?? []).join('、'),
+    // A star parsed out of a `star-title-tag` filename pre-fills the cast field.
+    castText: title ? (title.cast ?? []).join('、') : (suggestion.actor ?? ''),
     backdropPath: title?.backdropPath ?? '',
   }
 }

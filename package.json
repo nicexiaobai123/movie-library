@@ -21,6 +21,7 @@
     "test:backdrop": "node --test tests/backdrop-search.test.mjs",
     "test:batch4": "node --test tests/batch4.test.mjs",
     "test:actions": "node --test tests/detail-actions.test.mjs",
+    "test:actors": "node --test tests/actors.test.mjs",
     "backup": "node scripts/backup.mjs",
     "test:frame": "node --test tests/frame.test.mjs",
     "test:control": "node --test tests/control.test.mjs",

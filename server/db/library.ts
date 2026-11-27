@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import type { DatabaseSync } from 'node:sqlite'
 import type {
-  AdminTitle, BrowseQuery, BrowseResult, HomeData, HomeRail, LibraryCard, LibraryEpisode, LibraryKind,
+  ActorSummary, AdminTitle, BrowseQuery, BrowseResult, HomeData, HomeRail, LibraryCard, LibraryEpisode, LibraryKind,
   PlayableMedia, ScanResult, TitleDetail,
 } from '../../shared/types/library.ts'
 import { transaction } from './database.ts'
@@ -180,6 +180,7 @@ export function libraryStore(db: DatabaseSync) {
     if (query.yearFrom !== null) { clauses.push('t.year >= ?'); params.push(query.yearFrom) }
     if (query.yearTo !== null) { clauses.push('t.year <= ?'); params.push(query.yearTo) }
     if (query.minRating !== null) { clauses.push('t.rating >= ?'); params.push(query.minRating) }
+    if (query.actor) { clauses.push(`EXISTS (SELECT 1 FROM json_each(t.cast_members) a WHERE a.value = ?)`); params.push(query.actor) }
     const where = clauses.join(' AND ')
     const total = (db.prepare(`SELECT COUNT(*) AS n FROM titles t WHERE ${where}`).get(...params) as unknown as { n: number }).n
     const offset = (query.page - 1) * query.pageSize
@@ -189,6 +190,7 @@ export function libraryStore(db: DatabaseSync) {
       .all(...params, query.pageSize, offset) as unknown as (TitleRecord & { available: 0 | 1 })[]
     const facets = allPublishedCards()
     const unique = (values: (string | null)[]) => [...new Set(values.filter((value): value is string => Boolean(value)))].sort()
+    const actorNames = [...new Set(publishedRows().flatMap(row => parseList(row.cast_members)))]
     return {
       items: rows.map(row => card(row)),
       total,
@@ -198,14 +200,14 @@ export function libraryStore(db: DatabaseSync) {
         genres: unique(facets.flatMap(item => item.genres)),
         regions: unique(facets.map(item => visibleTitle(item.id)?.region ?? null)),
         years: [...new Set(facets.map(item => item.year).filter((year): year is number => year !== null))].sort((a, b) => b - a),
+        actors: actorNames.sort((a, b) => a.localeCompare(b, 'zh-CN')),
       },
     }
   }
 
   // Rails are curated from the same published set, so every row stays honest
   // when the library is small: no fabricated entries, only reordered real titles.
-  function home(): HomeData {
-    const items = allPublishedCards()
+  function home(): HomeData {    const items = allPublishedCards()
     const withGenre = (name: string) => items.filter(item => item.genres.includes(name))
     const byRating = [...items].sort((a, b) => (b.rating ?? 0) - (a.rating ?? 0))
     const byYear = [...items].filter(item => item.year !== null).sort((a, b) => (b.year ?? 0) - (a.year ?? 0))
@@ -242,8 +244,28 @@ export function libraryStore(db: DatabaseSync) {
     }
   }
 
+  // Actors are derived from each title's cast list; there is no separate table, so
+  // the actor index always reflects whatever the library currently holds.
+  function actors(): ActorSummary[] {
+    const counts = new Map<string, { count: number; poster: string | null }>()
+    for (const row of publishedRows()) {
+      const seen = new Set<string>()
+      for (const name of parseList(row.cast_members)) {
+        if (seen.has(name)) continue
+        seen.add(name)
+        const entry = counts.get(name) ?? { count: 0, poster: posterUrl(row) }
+        entry.count++
+        counts.set(name, entry)
+      }
+    }
+    return [...counts.entries()]
+      .map(([name, entry]) => ({ name, count: entry.count, posterUrl: entry.poster }))
+      .sort((a, b) => b.count - a.count || a.name.localeCompare(b.name, 'zh-CN'))
+  }
+
   return {
     transact: <T>(work: () => T) => transaction(db, work),
+    actors,
     cards(q: string, kind: LibraryKind | null): LibraryCard[] {
       return allPublishedCards().filter(item =>
         (!kind || item.kind === kind) && item.title.toLowerCase().includes(q.toLowerCase()))
