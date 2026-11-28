@@ -1,6 +1,6 @@
 <script setup lang="ts">
 defineProps<{
-  name: 'lamp' | 'film' | 'search' | 'back' | 'play' | 'pause' | 'download' | 'archive' | 'warning' | 'clock' | 'settings' | 'expand' | 'collapse'
+  name: 'lamp' | 'film' | 'search' | 'back' | 'play' | 'pause' | 'next' | 'download' | 'archive' | 'warning' | 'clock' | 'settings' | 'expand' | 'collapse'
 }>()
 </script>
 
@@ -33,6 +33,10 @@ defineProps<{
     <path v-else-if="name === 'play'" d="M8.5 5.75 18.5 12l-10 6.25V5.75Z" />
     <template v-else-if="name === 'pause'">
       <path d="M9.25 6v12M14.75 6v12" stroke-width="2.4" />
+    </template>
+    <template v-else-if="name === 'next'">
+      <path d="M6.5 6.5 14 12l-7.5 5.5V6.5Z" fill="currentColor" stroke="none" />
+      <path d="M17.5 6v12" stroke-width="2.2" />
     </template>
     <path v-else-if="name === 'download'" d="M12 3.75v11m-4-4 4 4 4-4M5 15.5v4.75h14V15.5" />
     <template v-else-if="name === 'archive'">

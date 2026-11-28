@@ -37,6 +37,72 @@ const activeEpisode = computed(() => {
 })
 const invalidEpisode = computed(() => detail.value?.kind === 'series'
   && requestedEpisode.value !== undefined && !activeEpisode.value)
+
+// Episodes in viewing order; "next" means the following slot that actually has a
+// file, so a gap in the folder does not dead-end the button.
+const orderedEpisodes = computed(() => {
+  if (detail.value?.kind !== 'series') return []
+  return [...detail.value.episodes].sort((a, b) => a.season - b.season || a.episode - b.episode)
+})
+const nextEpisode = computed(() => {
+  const current = activeEpisode.value
+  if (!current) return undefined
+  const list = orderedEpisodes.value
+  const index = list.findIndex(episode => episode.id === current.id)
+  if (index < 0) return undefined
+  return list.slice(index + 1).find(episode => episode.media?.available)
+})
+const previousEpisode = computed(() => {
+  const current = activeEpisode.value
+  if (!current) return undefined
+  const list = orderedEpisodes.value
+  const index = list.findIndex(episode => episode.id === current.id)
+  if (index <= 0) return undefined
+  return list.slice(0, index).reverse().find(episode => episode.media?.available)
+})
+
+function watchEpisode(episode: { id: string }) {
+  return navigateTo({
+    path: `/watch/${encodeURIComponent(titleId.value)}`,
+    query: { episode: episode.id },
+  })
+}
+
+// Reaching the end should move on rather than replay a finished episode, but only
+// when there really is a next one — the film and the last episode just stop.
+const endedNextId = ref<string | null>(null)
+const endedCountdown = ref(0)
+let endedTimer: ReturnType<typeof setInterval> | undefined
+
+function stopEndedCountdown() {
+  if (endedTimer !== undefined) {
+    clearInterval(endedTimer)
+    endedTimer = undefined
+  }
+}
+
+function cancelEndedCountdown() {
+  stopEndedCountdown()
+  endedNextId.value = null
+  endedCountdown.value = 0
+}
+
+function onEnded() {
+  reportProgress(true)
+  syncTransport()
+  revealControls()
+  const next = nextEpisode.value
+  if (!next) return
+  endedNextId.value = next.id
+  endedCountdown.value = 5
+  stopEndedCountdown()
+  endedTimer = setInterval(() => {
+    endedCountdown.value -= 1
+    if (endedCountdown.value > 0) return
+    stopEndedCountdown()
+    if (endedNextId.value) void watchEpisode({ id: endedNextId.value })
+  }, 1000)
+}
 const media = computed(() => detail.value?.kind === 'movie' ? detail.value.movie : activeEpisode.value?.media)
 const sourceUrl = computed(() => media.value?.available ? `/api/media/${encodeURIComponent(media.value.id)}` : undefined)
 const downloadUrl = computed(() => sourceUrl.value ? `${sourceUrl.value}/download` : undefined)
@@ -423,6 +489,7 @@ function handlePlayerKey(event: KeyboardEvent) {
 watch(videoKey, () => {
   playbackError.value = ''
   seekNotice.value = ''
+  cancelEndedCountdown()
 })
 watch(player, (element) => {
   // Metadata preloading can fail before the SSR video is hydrated.
@@ -450,6 +517,7 @@ onBeforeUnmount(() => {
   if (hideTimer !== undefined) clearTimeout(hideTimer)
   if (hintTimer !== undefined) clearTimeout(hintTimer)
   if (swipeTimer !== undefined) clearTimeout(swipeTimer)
+  stopEndedCountdown()
 })
 
 function flushProgress() {
@@ -534,7 +602,7 @@ watch(videoKey, () => {
             @durationchange="syncTransport()"
             @play="syncTransport(); revealControls(); showZoneHintOnce()"
             @pause="reportProgress(true); syncTransport(); revealControls()"
-            @ended="reportProgress(true); syncTransport(); revealControls()"
+            @ended="onEnded"
             @dblclick="touchUi ? undefined : toggleFullscreen()"
           >
             当前浏览器不支持网页视频。<a :href="downloadUrl" download>下载原文件</a>后可用本地播放器观看。
@@ -577,6 +645,43 @@ watch(videoKey, () => {
               <span class="watch-transport-fill" :style="{ inlineSize: `${duration ? (progress / duration) * 100 : 0}%` }" />
             </div>
             <span class="watch-transport-clock">{{ clockTime(duration) }}</span>
+            <!-- The next episode is one tap away on a phone too. -->
+            <button
+              v-if="nextEpisode"
+              class="watch-transport-button watch-transport-next"
+              type="button"
+              :aria-label="`下一集：第 ${nextEpisode.season} 季第 ${nextEpisode.episode} 集`"
+              data-test="touch-next"
+              @click="watchEpisode(nextEpisode)"
+            >
+              <PublicIcon name="next" />
+            </button>
+          </div>
+
+          <!-- Episode stepping sits in the bottom-left corner of the picture, where
+               the native bar keeps its own transport controls. -->
+          <div v-if="!touchUi && (nextEpisode || previousEpisode)" class="watch-episode-nav" data-test="episode-nav">
+            <button
+              v-if="previousEpisode"
+              class="watch-episode-nav-button"
+              type="button"
+              :aria-label="`上一集：第 ${previousEpisode.season} 季第 ${previousEpisode.episode} 集`"
+              data-test="episode-prev"
+              @click="watchEpisode(previousEpisode)"
+            >
+              <PublicIcon name="next" class="watch-episode-nav-back" />
+            </button>
+            <button
+              v-if="nextEpisode"
+              class="watch-episode-nav-button"
+              type="button"
+              :aria-label="`下一集：第 ${nextEpisode.season} 季第 ${nextEpisode.episode} 集`"
+              data-test="episode-next"
+              @click="watchEpisode(nextEpisode)"
+            >
+              <PublicIcon name="next" />
+            </button>
+            <span class="watch-episode-nav-label">下一集</span>
           </div>
 
           <!-- Touch hint: the left and right thirds of the picture are seek zones.
@@ -594,6 +699,22 @@ watch(videoKey, () => {
 
           <p v-if="seekNotice" class="watch-seek" aria-hidden="true">{{ seekNotice }}</p>
           <p v-else-if="resumeNotice" class="watch-seek" role="status" data-test="resume-notice">{{ resumeNotice }}</p>
+
+          <!-- A finished episode offers the next one instead of silently stopping. -->
+          <div v-if="endedCountdown > 0 && nextEpisode" class="watch-next-card" role="status" data-test="next-up">
+            <p class="watch-next-title">
+              即将播放 第 {{ nextEpisode.season }} 季第 {{ nextEpisode.episode }} 集
+              <span class="watch-next-seconds">{{ endedCountdown }} 秒</span>
+            </p>
+            <div class="watch-next-actions">
+              <button class="btn watch-next-play" type="button" data-test="next-up-play" @click="watchEpisode(nextEpisode)">
+                立即播放
+              </button>
+              <button class="btn watch-next-cancel" type="button" data-test="next-up-cancel" @click="cancelEndedCountdown">
+                取消
+              </button>
+            </div>
+          </div>
           <div v-if="isFullscreen" class="watch-overlay">
             <button
               class="watch-overlay-button"
@@ -795,6 +916,7 @@ watch(videoKey, () => {
   font-size: 0.74rem;
   font-variant-numeric: tabular-nums;
 }
+.watch-transport-next { margin-inline-start: 0.1rem; }
 /* The track is tall enough to grab with a finger; the visible line stays thin. */
 .watch-transport-track {
   position: relative;
@@ -825,6 +947,63 @@ watch(videoKey, () => {
 }
 .watch-transport-track:focus-visible { outline: 2px solid var(--accent-strong); outline-offset: 3px; border-radius: var(--radius-xs); }
 
+
+/* The end-of-episode card: an offer to keep watching, with a real countdown. */
+.watch-next-card {
+  position: absolute;
+  z-index: 7;
+  inset-block-end: 3.6rem;
+  inset-inline-end: 0.9rem;
+  display: grid;
+  gap: 0.55rem;
+  max-inline-size: min(20rem, calc(100% - 1.8rem));
+  padding: 0.75rem 0.9rem;
+  border-radius: var(--radius-sm);
+  background: rgb(0 0 0 / 0.85);
+  color: #fff;
+  backdrop-filter: blur(8px);
+}
+.watch-next-title { margin: 0; font-size: 0.86rem; line-height: 1.45; }
+.watch-next-seconds { color: var(--accent); font-variant-numeric: tabular-nums; }
+.watch-next-actions { display: flex; flex-wrap: wrap; gap: 0.45rem; }
+.watch-next-play { min-block-size: 34px; padding-inline: 0.8rem; background: var(--accent); color: var(--on-accent); font-size: 0.8rem; }
+.watch-next-cancel { min-block-size: 34px; padding-inline: 0.7rem; border-color: rgb(255 255 255 / 0.3); background: transparent; color: #fff; font-size: 0.8rem; }
+
+/* Episode stepping in the bottom-left corner of the picture. It floats above the
+   native control bar, which keeps its own transport on the same edge. */
+.watch-episode-nav {
+  position: absolute;
+  z-index: 4;
+  inset-block-end: 4.4rem;
+  inset-inline-start: 0.9rem;
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+}
+.watch-episode-nav-button {
+  display: grid;
+  place-items: center;
+  inline-size: 2.3rem;
+  block-size: 2.3rem;
+  border: 1px solid rgb(255 255 255 / 0.18);
+  border-radius: 50%;
+  background: rgb(0 0 0 / 0.7);
+  color: #fff;
+  backdrop-filter: blur(6px);
+  transition: background var(--dur-fast) var(--ease), border-color var(--dur-fast) var(--ease);
+}
+.watch-episode-nav-button:hover { border-color: rgb(255 255 255 / 0.45); background: rgb(0 0 0 / 0.88); }
+.watch-episode-nav-button :deep(svg) { inline-size: 1.05rem; block-size: 1.05rem; }
+.watch-episode-nav-back { transform: rotate(180deg); }
+.watch-episode-nav-label {
+  padding: 0.2rem 0.5rem;
+  border-radius: var(--radius-pill);
+  background: rgb(0 0 0 / 0.6);
+  color: rgb(255 255 255 / 0.9);
+  font-size: 0.76rem;
+  white-space: nowrap;
+  backdrop-filter: blur(6px);
+}
 
 /* The left/right thirds are seek zones on touch; this hint names them once, briefly,
    just above the transport bar so it does not cover the picture itself. */
