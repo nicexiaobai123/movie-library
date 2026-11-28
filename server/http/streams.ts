@@ -28,7 +28,7 @@ async function stream(event: H3Event, file: FileHandle, range?: { start: number;
   }
 }
 
-type VideoOpener = (id: string) => Promise<{ file: FileHandle; size: number; mtime: number; version: number; name: string }>
+type VideoOpener = (id: string) => Promise<{ file: FileHandle; size: number; mtime: number; name: string }>
 
 export async function sendVideo(event: H3Event, runtime: LibraryRuntime, attachment: boolean, open: VideoOpener = id => runtime.catalog.video(id)): Promise<void> {
   checkReadMethod(event)
@@ -36,7 +36,8 @@ export async function sendVideo(event: H3Event, runtime: LibraryRuntime, attachm
   const video = await open(id)
   let ownsFile = true
   try {
-    const etag = `"${id}-${video.version}-${video.mtime}-${video.size}"`
+    // The file's own mtime and size identify the version; there is no separate column.
+    const etag = `"${id}-${video.mtime}-${video.size}"`
     const modified = new Date(video.mtime).toUTCString()
     setHeader(event, 'Accept-Ranges', 'bytes')
     setHeader(event, 'Cache-Control', 'private, no-cache')
@@ -72,12 +73,12 @@ export async function sendVideo(event: H3Event, runtime: LibraryRuntime, attachm
   }
 }
 
-export async function sendPoster(event: H3Event, runtime: LibraryRuntime, id = routeId(event), variant: 'poster' | 'backdrop' = 'poster'): Promise<void> {
+export async function sendPoster(event: H3Event, runtime: LibraryRuntime, id = routeId(event)): Promise<void> {
   checkReadMethod(event)
-  const poster = await runtime.catalog.poster(id, variant)
+  const poster = await runtime.catalog.poster(id)
   // The validator follows the file, so a replaced cover invalidates it naturally
   // while an unchanged one costs only a 304 on every later request.
-  const etag = `"poster-${variant}-${id}-${poster.mtime}-${poster.size}"`
+  const etag = `"poster-${id}-${poster.mtime}-${poster.size}"`
   const modified = new Date(poster.mtime).toUTCString()
   setHeader(event, 'ETag', etag)
   setHeader(event, 'Last-Modified', modified)

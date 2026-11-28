@@ -334,7 +334,7 @@ watch(videoKey, () => {
         <h1>{{ detail.title }}</h1>
         <p v-if="activeEpisode" class="watch-episode">
           <span>第 {{ activeEpisode.season }} 季 · 第 {{ activeEpisode.episode }} 集</span>
-          <span v-if="activeEpisode.title" class="watch-episode-name">{{ activeEpisode.title }}</span>
+          <span v-if="activeEpisode" class="watch-episode-name">第 {{ activeEpisode.season }} 季第 {{ activeEpisode.episode }} 集</span>
         </p>
       </header>
 
@@ -445,10 +445,9 @@ watch(videoKey, () => {
         <p v-if="detail.description" class="watch-about-text">{{ detail.description }}</p>
         <p v-else class="watch-about-text watch-about-text--muted">暂无简介。</p>
         <p class="watch-about-meta">
-          <span v-if="detail.rating" class="watch-about-score">★ {{ detail.rating.toFixed(1) }}</span>
           <span v-if="detail.year">{{ detail.year }}</span>
-          <span v-if="detail.region">{{ detail.region }}</span>
-          <span v-for="genre in detail.genres" :key="genre">{{ genre }}</span>
+          <span v-if="detail.runtime">{{ detail.runtime }} 分钟</span>
+          <span v-if="detail.cast.length">{{ detail.cast.join(' / ') }}</span>
         </p>
       </section>
 

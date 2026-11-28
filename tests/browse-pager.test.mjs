@@ -35,7 +35,7 @@ test('browse page paginates like a catalogue', { timeout: 240_000 }, async (t) =
       cards: document.querySelectorAll('#browse-results .card').length,
       numbers: [...document.querySelectorAll('[data-test="browse-pager"] .pager-number')].map(n => n.textContent.trim()),
       current: document.querySelector('[data-test="browse-pager"] .pager-number.is-current')?.textContent.trim() ?? null,
-      prevDisabled: document.querySelector('[data-test="browse-prev"]').disabled,
+      prevDisabled: document.querySelector('[data-test="browse-pager"] .pager-controls button').disabled,
     }))
     report.push(`page 1: ${JSON.stringify(first)}`)
     assert.equal(first.cards, 24, '24 cards per page')
@@ -47,13 +47,13 @@ test('browse page paginates like a catalogue', { timeout: 240_000 }, async (t) =
     await page.screenshot({ path: '.test-artifacts/browse-pager.png', fullPage: false })
 
     // Jump to the last page by number.
-    await page.locator('[data-test="browse-page-3"]').click()
+    await page.locator('[data-test="browse-pager"] .pager-number', { hasText: '3' }).click()
     await page.waitForFunction(() => location.search.includes('page=3'), null, { timeout: 10_000 })
     await page.waitForTimeout(500)
     const last = await page.evaluate(() => ({
       info: document.querySelector('[data-test="browse-pager"] .pager-info').textContent.trim(),
       cards: document.querySelectorAll('#browse-results .card').length,
-      nextDisabled: document.querySelector('[data-test="browse-next"]').disabled,
+      nextDisabled: [...document.querySelectorAll('[data-test="browse-pager"] .pager-controls button')].at(-1).disabled,
       scrollY: Math.round(window.scrollY),
     }))
     report.push(`page 3: ${JSON.stringify(last)}`)
@@ -61,16 +61,17 @@ test('browse page paginates like a catalogue', { timeout: 240_000 }, async (t) =
     assert.equal(last.cards, 12, 'the last page holds the remainder')
     assert.ok(last.nextDisabled, 'next is disabled on the last page')
 
-    // Filters reset paging back to the first page.
-    await page.locator('.filter-group', { hasText: '类型' }).locator('.chip', { hasText: '全部' }).first().click()
+    // Sorting resets paging back to the first page.
+    await page.locator('[data-test="sort"]').selectOption('title')
     await page.waitForTimeout(400)
-    report.push(`after filter: page=${new URL(page.url()).searchParams.get('page') ?? '(none)'}`)
-    assert.notEqual(new URL(page.url()).searchParams.get('page'), '3', 'changing a filter returns to page 1')
+    report.push(`after sort: page=${new URL(page.url()).searchParams.get('page') ?? '(none)'}`)
+    assert.notEqual(new URL(page.url()).searchParams.get('page'), '3', 'changing the order returns to page 1')
 
     // The pager must not appear when everything fits on one page.
-    await page.goto(`${fx.base}/browse?kind=movie&genre=不存在`, { waitUntil: 'networkidle' })
+    await page.goto(`${fx.base}/browse?kind=movie&actor=${encodeURIComponent('不存在的人')}`, { waitUntil: 'networkidle' })
     await page.waitForTimeout(400)
     assert.equal(await page.locator('[data-test="browse-pager"]').count(), 0, 'a single page has no pager')
+    assert.match(await page.locator('.state-note').innerText(), /没有符合条件/)
   } finally {
     console.log(report.join('\n'))
     await browser.close()

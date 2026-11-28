@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import type { BrowseResult, LibraryKind } from '#shared/types/library'
+import AppPager from '~/components/public/AppPager.vue'
 import MovieCard from '~/components/public/MovieCard.vue'
 
 const route = useRoute()
@@ -7,8 +8,6 @@ const router = useRouter()
 
 const sorts = [
   { value: 'newest', label: '最新入库' },
-  { value: 'rating', label: '评分最高' },
-  { value: 'year', label: '年份最新' },
   { value: 'title', label: '按片名' },
 ] as const
 
@@ -17,24 +16,19 @@ function readQuery() {
   return {
     q: value('q'),
     kind: value('kind') === 'movie' || value('kind') === 'series' ? value('kind') as LibraryKind : '',
-    genre: value('genre'),
-    region: value('region'),
     actor: value('actor'),
-    minRating: value('minRating'),
     sort: value('sort') || 'newest',
     page: Math.max(1, Number(value('page')) || 1),
   }
 }
 
 const filters = computed(readQuery)
-// The top navigation already separates films from series, so this page never
-// shows its own kind switch; it just renders whichever kind was asked for.
 const isSeries = computed(() => filters.value.kind === 'series')
 const heading = computed(() => {
   if (filters.value.actor) return { eyebrow: '演员', title: filters.value.actor, lede: `${filters.value.actor}在片库中的作品。` }
   if (isSeries.value) return { eyebrow: '剧集', title: '剧集', lede: '多集连续播放的作品，按季与集展开。' }
-  if (filters.value.kind === 'movie') return { eyebrow: '电影', title: '电影', lede: '单部作品，按类型、地区和评分浏览。' }
-  return { eyebrow: '片库', title: '全部作品', lede: '按类型、地区和评分浏览整座片库。' }
+  if (filters.value.kind === 'movie') return { eyebrow: '电影', title: '电影', lede: '片库中的单部作品。' }
+  return { eyebrow: '片库', title: '全部作品', lede: '浏览整座片库。' }
 })
 useSeoMeta({
   title: () => `${heading.value.title} · 夜灯`,
@@ -44,45 +38,22 @@ useSeoMeta({
 const apiQuery = computed(() => ({
   q: filters.value.q || undefined,
   kind: filters.value.kind || undefined,
-  genre: filters.value.genre || undefined,
-  region: filters.value.region || undefined,
   actor: filters.value.actor || undefined,
-  minRating: filters.value.minRating || undefined,
   sort: filters.value.sort,
   page: filters.value.page,
   pageSize: 24,
 }))
 
-const { data, status, refresh } = await useFetch<BrowseResult>('/api/library/browse', {
+const { data, status } = await useFetch<BrowseResult>('/api/library/browse', {
   query: apiQuery,
   deep: false,
 })
 const result = computed(() => data.value)
 const pages = computed(() => Math.max(1, Math.ceil((result.value?.total ?? 0) / (result.value?.pageSize ?? 24))))
 
-// Page numbers with the first/last always reachable and a short window around the
-// current one, so a hundred pages do not produce a hundred buttons.
-const pageNumbers = computed<(number | 'gap')[]>(() => {
-  const total = pages.value
-  if (total <= 7) return Array.from({ length: total }, (_, index) => index + 1)
-  const wanted = new Set([1, total, filters.value.page, filters.value.page - 1, filters.value.page + 1])
-  const sorted = [...wanted].filter(value => value >= 1 && value <= total).sort((a, b) => a - b)
-  const out: (number | 'gap')[] = []
-  let previous = 0
-  for (const value of sorted) {
-    if (previous && value - previous > 1) out.push('gap')
-    out.push(value)
-    previous = value
-  }
-  return out
-})
-
-const rangeStart = computed(() => (result.value?.items.length ? (filters.value.page - 1) * (result.value.pageSize ?? 24) + 1 : 0))
-const rangeEnd = computed(() => rangeStart.value + (result.value?.items.length ?? 0) - 1)
-
 const sheetOpen = ref(false)
+const activeCount = computed(() => (filters.value.actor ? 1 : 0))
 
-// Changing the page also returns to the top, so the new results start in view.
 function goToPage(next: number) {
   const target = Math.min(Math.max(1, next), pages.value)
   if (target === filters.value.page) return
@@ -96,15 +67,13 @@ function goToPage(next: number) {
 function update(patch: Record<string, string | number | null | undefined>) {
   const next: Record<string, string> = {}
   for (const [key, value] of Object.entries({ ...route.query, ...patch })) {
-    if (value === null || value === undefined || value === '' || (key === 'page' && Number(value) === 1) || (key === 'sort' && value === 'newest')) continue
+    if (value === null || value === undefined || value === ''
+      || (key === 'page' && Number(value) === 1)
+      || (key === 'sort' && value === 'newest')) continue
     next[key] = String(value)
   }
   void router.replace({ path: '/browse', query: next })
 }
-
-// `kind` belongs to the navigation, not to the filters, so it is not counted.
-const activeCount = computed(() => [filters.value.genre, filters.value.region, filters.value.actor, filters.value.minRating]
-  .filter(Boolean).length)
 
 function clearAll() {
   const keep: Record<string, string> = {}
@@ -133,189 +102,120 @@ function clearAll() {
             <option v-for="sort in sorts" :key="sort.value" :value="sort.value">{{ sort.label }}</option>
           </select>
         </label>
-        <button class="btn btn--ghost filter-toggle" type="button" :aria-expanded="sheetOpen" @click="sheetOpen = !sheetOpen">
-          筛选<span v-if="activeCount" class="filter-count">{{ activeCount }}</span>
-        </button>
+        <button
+          v-if="activeCount"
+          class="btn btn--ghost filter-toggle"
+          type="button"
+          data-test="browse-clear"
+          @click="clearAll"
+        >清除筛选</button>
       </div>
     </div>
 
     <div class="browse-layout shell">
-      <aside class="filters" :class="{ 'is-open': sheetOpen }" aria-label="筛选条件">
+      <aside v-if="activeCount" class="filters" aria-label="筛选条件">
         <div class="filter-head">
           <h2>筛选</h2>
-          <button v-if="activeCount" class="filter-clear" type="button" @click="clearAll">清除</button>
+          <button class="filter-clear" type="button" @click="clearAll">清除</button>
         </div>
-        <template v-if="result?.facets">
-          <fieldset class="filter-group">
-            <legend>类型</legend>
-            <div class="chips">
-              <button type="button" class="chip" :aria-pressed="!filters.genre" @click="update({ genre: null, page: null })">全部</button>
-              <button
-                v-for="genre in result.facets.genres"
-                :key="genre"
-                type="button"
-                class="chip"
-                :aria-pressed="filters.genre === genre"
-                @click="update({ genre, page: null })"
-              >{{ genre }}</button>
-            </div>
-          </fieldset>
-          <fieldset v-if="result.facets.regions.length" class="filter-group">
-            <legend>地区</legend>
-            <div class="chips">
-              <button type="button" class="chip" :aria-pressed="!filters.region" @click="update({ region: null, page: null })">全部</button>
-              <button
-                v-for="region in result.facets.regions"
-                :key="region"
-                type="button"
-                class="chip"
-                :aria-pressed="filters.region === region"
-                @click="update({ region, page: null })"
-              >{{ region }}</button>
-            </div>
-          </fieldset>
-          <fieldset v-if="result.facets.actors?.length" class="filter-group">
-            <legend>演员</legend>
-            <div class="chips">
-              <button type="button" class="chip" :aria-pressed="!filters.actor" @click="update({ actor: null, page: null })">全部</button>
-              <button
-                v-for="actor in result.facets.actors.slice(0, 12)"
-                :key="actor"
-                type="button"
-                class="chip"
-                :aria-pressed="filters.actor === actor"
-                @click="update({ actor, page: null })"
-              >{{ actor }}</button>
-            </div>
-          </fieldset>
-        </template>
-        <fieldset class="filter-group">
-          <legend>评分</legend>
+        <fieldset v-if="result?.actors?.length" class="filter-group">
+          <legend>演员</legend>
           <div class="chips">
-            <button type="button" class="chip" :aria-pressed="!filters.minRating" @click="update({ minRating: null, page: null })">不限</button>
+            <button type="button" class="chip" :aria-pressed="!filters.actor" @click="update({ actor: null, page: null })">全部</button>
             <button
-              v-for="score in ['8', '7', '6']"
-              :key="score"
+              v-for="actor in result.actors"
+              :key="actor"
               type="button"
               class="chip"
-              :aria-pressed="filters.minRating === score"
-              @click="update({ minRating: score, page: null })"
-            >{{ score }} 分以上</button>
+              :aria-pressed="filters.actor === actor"
+              @click="update({ actor, page: null })"
+            >{{ actor }}</button>
           </div>
         </fieldset>
       </aside>
 
-      <section class="results">
-        <div v-if="status === 'pending' || status === 'idle'" class="grid" aria-hidden="true">
-          <div v-for="n in 8" :key="n" class="skeleton-card" />
-        </div>
-        <div v-else-if="status === 'error'" class="state" role="alert">
-          <p>暂时无法读取片库。</p>
-          <button class="btn btn--ghost" type="button" @click="refresh()">重试</button>
-        </div>
-        <div v-else-if="!result?.items.length" class="state">
-          <h2>没有符合条件的{{ isSeries ? '剧集' : (filters.kind === 'movie' ? '电影' : '作品') }}</h2>
-          <p v-if="activeCount">试着放宽筛选条件。</p>
-          <p v-else-if="isSeries">还没有入库任何剧集。文件名带集号（如「潮声来处 S01E02.mp4」或「潮声来处 第02集.mp4」）的视频，上传或扫描后会自动成为同一部剧。</p>
-          <p v-else>片库还是空的，可以先到管理后台上传或扫描影片。</p>
-          <button v-if="activeCount" class="btn" type="button" @click="clearAll">清除筛选</button>
-          <NuxtLink v-else-if="!filters.kind" to="/browse?kind=movie" class="btn">去看电影</NuxtLink>
-          <NuxtLink v-else to="/admin" class="btn">进入管理后台上传</NuxtLink>
-        </div>
-        <template v-else>
-          <ul id="browse-results" class="grid" role="list">
-            <li v-for="item in result.items" :key="item.id">
-              <MovieCard :item="item" />
-            </li>
-          </ul>
-          <!-- Browsing a large library needs real pagination: a count, page numbers
-               and a jump back to the top, like a streaming catalogue. -->
-          <nav v-if="pages > 1" class="pager" aria-label="翻页" data-test="browse-pager">
-            <p class="pager-info">
-              第 {{ rangeStart }}–{{ rangeEnd }} 部，共 {{ result.total }} 部<template v-if="pages > 1"> · 第 {{ filters.page }} / {{ pages }} 页</template>
-            </p>
-            <div class="pager-controls">
-              <button class="btn btn--ghost" type="button" :disabled="filters.page <= 1" data-test="browse-prev" @click="goToPage(filters.page - 1)">上一页</button>
-              <template v-for="(entry, index) in pageNumbers" :key="`${entry}-${index}`">
-                <span v-if="entry === 'gap'" class="pager-gap" aria-hidden="true">…</span>
-                <button
-                  v-else
-                  class="btn pager-number"
-                  :class="{ 'is-current': entry === filters.page }"
-                  type="button"
-                  :aria-current="entry === filters.page ? 'page' : undefined"
-                  :data-test="`browse-page-${entry}`"
-                  @click="goToPage(entry)"
-                >{{ entry }}</button>
-              </template>
-              <button class="btn btn--ghost" type="button" :disabled="filters.page >= pages" data-test="browse-next" @click="goToPage(filters.page + 1)">下一页</button>
-            </div>
-          </nav>
-        </template>
+      <section id="browse-results" class="results" aria-label="作品列表">
+        <p v-if="status === 'pending'" class="state-note">正在读取…</p>
+        <p v-else-if="!result?.items.length" class="state-note">没有符合条件的作品。</p>
+        <ul v-else class="grid" role="list">
+          <li v-for="item in result.items" :key="item.id">
+            <MovieCard :item="item" />
+          </li>
+        </ul>
+
+        <!-- Pagination sits at the bottom-right, with first/last shortcuts and
+             single-arrow steps, so long catalogues stay easy to walk. -->
+        <AppPager
+          v-if="pages > 1"
+          :page="filters.page"
+          :page-count="pages"
+          :summary="`共 ${result?.total ?? 0} 部`"
+          test-prefix="browse"
+          @go="goToPage"
+        />
       </section>
     </div>
   </div>
 </template>
 
 <style scoped>
-.browse { padding-block: calc(var(--header-h) + clamp(1.5rem, 4vw, 3rem)) clamp(2rem, 5vw, 4rem); }
-.browse-head { display: grid; gap: 0.6rem; padding-block-end: clamp(1.2rem, 2.6vw, 2rem); }
-.browse-head h1 { font-size: clamp(1.9rem, 4vw, 3rem); font-weight: 700; }
-.browse-lede { margin: 0; color: var(--text-secondary); font-size: 0.95rem; }
-.browse-bar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 0.8rem; padding-block-end: 1.4rem; border-block-end: 1px solid var(--border); }
+.browse { padding-block-end: clamp(2rem, 4vw, 3rem); }
+.browse-head { padding-block: clamp(1.6rem, 3vw, 2.4rem) 0; }
+.eyebrow { color: var(--accent); font-size: 0.75rem; font-weight: 600; letter-spacing: 0.12em; }
+.browse-head h1 { margin-block: 0.5rem 0; font-family: var(--font-display); font-size: clamp(1.8rem, 3.6vw, 2.6rem); font-weight: 500; }
+.browse-lede { margin-block-start: 0.5rem; color: var(--text-muted); }
+.browse-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem 1.5rem;
+  margin-block: 1.4rem 0;
+  padding-block-end: 0.9rem;
+  border-block-end: 1px solid var(--border);
+}
+.result-count { margin: 0; color: var(--text-muted); font-size: 0.86rem; font-variant-numeric: tabular-nums; }
 .bar-actions { display: flex; align-items: center; gap: 0.6rem; }
-.sort-select { min-block-size: 40px; font-size: 0.85rem; }
-.filter-toggle { display: none; min-block-size: 40px; align-items: center; gap: 0.4rem; font-size: 0.85rem; }
-.filter-count { padding: 0 0.35rem; border-radius: var(--radius-pill); background: var(--accent); color: var(--on-accent); font-size: 0.7rem; font-weight: 700; }
-
-.browse-layout { display: grid; grid-template-columns: 14rem minmax(0, 1fr); gap: clamp(1.4rem, 2.6vw, 2.6rem); padding-block-start: 1.8rem; align-items: start; }
-.filters { display: grid; gap: 1.5rem; position: sticky; top: calc(var(--header-h) + 1rem); }
+.sort-select { min-block-size: 38px; }
+.browse-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 1.6rem;
+  margin-block-start: 1.6rem;
+}
+.filters { min-inline-size: 0; }
 .filter-head { display: flex; align-items: baseline; justify-content: space-between; }
 .filter-head h2 { font-size: 0.95rem; font-weight: 600; }
-.filter-clear { padding: 0; border: 0; background: transparent; color: var(--accent); font-size: 0.82rem; }
-.filter-group { margin: 0; padding: 0; border: 0; }
-.filter-group legend { padding: 0 0 0.6rem; color: var(--text-muted); font-size: 0.76rem; letter-spacing: 0.1em; }
-.chips { display: flex; flex-wrap: wrap; gap: 0.4rem; }
+.filter-clear { border: 0; background: transparent; color: var(--accent); font-size: 0.8rem; text-decoration: underline; }
+.filter-group { margin-block: 1rem 0; padding: 0; border: 0; }
+.filter-group legend { padding: 0; color: var(--text-muted); font-size: 0.78rem; }
+.chips { display: flex; flex-wrap: wrap; gap: 0.4rem; margin-block-start: 0.5rem; }
 .chip {
-  padding: 0.3rem 0.7rem;
+  min-block-size: 32px;
+  padding: 0.15rem 0.6rem;
   border: 1px solid var(--border);
   border-radius: var(--radius-pill);
   background: transparent;
-  color: var(--text-secondary);
-  font-size: 0.78rem;
-  transition: background-color var(--dur-fast) var(--ease), border-color var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
+  color: var(--text-muted);
+  font-size: 0.8rem;
 }
-.chip:hover { border-color: var(--border-strong); color: var(--text); }
 .chip[aria-pressed='true'] { border-color: var(--accent); background: var(--accent-soft); color: var(--accent); }
-
 .results { min-inline-size: 0; }
-.result-count { margin: 0 0 1rem; color: var(--text-muted); font-size: 0.82rem; }
-.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(11.5rem, 1fr)); gap: clamp(1rem, 1.8vw, 1.6rem) clamp(0.8rem, 1.4vw, 1.25rem); margin: 0; padding: 0; list-style: none; }
-.grid li { min-inline-size: 0; }
-.skeleton-card { aspect-ratio: 2 / 3; border-radius: var(--radius-sm); background: linear-gradient(100deg, #15171b 20%, #1d2026 40%, #15171b 60%); background-size: 220% 100%; animation: shimmer 1.5s linear infinite; }
-@keyframes shimmer { to { background-position: -220% 0; } }
-.state { display: grid; justify-items: start; gap: 0.8rem; padding-block: 3rem; color: var(--text-secondary); }
-.state h2 { font-size: 1.15rem; color: var(--text); }
-.pager { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 0.8rem 1rem; padding-block-start: 2.2rem; }
-.pager-info { margin: 0; color: var(--text-muted); font-size: 0.82rem; font-variant-numeric: tabular-nums; }
-.pager-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 0.3rem; }
-.pager-controls .btn { min-block-size: 38px; padding-inline: 0.75rem; font-size: 0.84rem; }
-.pager-number { min-inline-size: 38px; justify-content: center; color: var(--text-secondary); }
-.pager-number.is-current {
-  border-color: var(--accent);
-  background: var(--accent-soft);
-  color: var(--accent);
-  font-weight: 600;
+.grid {
+  display: grid;
+  /* Cards flow into as many columns as the width allows; the rail-style single
+     column that appeared when the results pane was squeezed is what this replaces. */
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 10rem), 1fr));
+  gap: clamp(0.9rem, 1.8vw, 1.5rem);
+  margin: 0;
+  padding: 0;
+  list-style: none;
 }
-.pager-gap { padding-inline: 0.2rem; color: var(--text-muted); font-size: 0.82rem; }
-
-@media (max-width: 62rem) {
-  .browse-layout { grid-template-columns: minmax(0, 1fr); }
-  .filters { position: static; display: none; padding: 1.2rem; border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--bg-elevated); }
-  .filters.is-open { display: grid; }
-  .filter-toggle { display: inline-flex; }
-}
-@media (max-width: 34rem) {
-  .grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.grid > li { min-inline-size: 0; }
+.state-note { color: var(--text-muted); }
+@media (min-width: 60rem) {
+  /* The filter column only exists while a filter is active; without it the results
+     must span the full width instead of being squeezed into the 14rem slot. */
+  .browse-layout:has(> .filters) { grid-template-columns: 14rem minmax(0, 1fr); }
 }
 </style>

@@ -44,7 +44,9 @@ export function libraryConfig(input: LibraryConfigInput): LibraryConfig {
   }
   return {
     ...paths,
-    scanIntervalMs: integer(input.scanIntervalMs, 'NUXT_LIBRARY_SCAN_INTERVAL_MS', 0, 2 ** 31 - 1, 15_000),
+    // Scans are on demand by default: nothing appears in the admin file list until
+    // someone asks for a sweep. A periodic sweep is opt-in via the environment.
+    scanIntervalMs: integer(input.scanIntervalMs, 'NUXT_LIBRARY_SCAN_INTERVAL_MS', 0, 2 ** 31 - 1, 0),
     stableMs: integer(input.stableMs, 'NUXT_LIBRARY_STABLE_MS', 100, 2 ** 31 - 1, 8_000),
     maxUploadBytes: integer(input.maxUploadBytes, 'NUXT_LIBRARY_MAX_UPLOAD_BYTES', 16, Number.MAX_SAFE_INTEGER, 32 * 1024 ** 3),
     allowedOrigins,

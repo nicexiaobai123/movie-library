@@ -1,14 +1,19 @@
+// The database is a projection of the media folder. These tests cover the store's
+// own rules: a scan indexes files, series collapse into ordered episodes, deleting a
+// file removes its title when nothing else uses it, and accounts survive a reopen.
 import assert from 'node:assert/strict'
-import { test } from 'node:test'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
+import { test } from 'node:test'
 import { openDatabase } from '../../server/db/database.ts'
 import { setAdmin, adminStore } from '../../server/db/admin.ts'
 import { hashPassword, verifyPassword } from '../../server/domain/password.ts'
 import { libraryStore } from '../../server/db/library.ts'
 import { userStore } from '../../server/db/users.ts'
-import { indexMedia } from '../../server/services/index-media.ts'
+import { indexMedia, pruneOrphans } from '../../server/services/index-media.ts'
+import { migrations } from '../../server/db/migrations.ts'
+import { pathKey } from '../../server/storage/paths.ts'
 
 async function database(t) {
   const parent = resolve(tmpdir())
@@ -16,7 +21,8 @@ async function database(t) {
   const name = join(root, 'db.sqlite')
   const db = openDatabase(name)
   t.after(async () => {
-    db.close()
+    // A test may close the handle itself; closing twice is not an error.
+    try { db.close() } catch { /* already closed */ }
     assert.equal(dirname(root), parent)
     assert.match(root.slice(parent.length + 1), /^night-db-test-[a-z0-9]+$/i)
     await rm(root, { recursive: true, force: true })
@@ -24,95 +30,155 @@ async function database(t) {
   return { db, name }
 }
 
-test('migration version persists on reopen and repeat indexing keeps IDs and edited title', async (t) => {
+const entry = (relative, size = 100) => ({ relative, stamp: { size, mtime: 1_000 } })
+
+test('a fresh database reaches the current schema version and reopens cleanly', async (t) => {
   const { db, name } = await database(t)
-  assert.equal(db.prepare('PRAGMA user_version').get().user_version, 5)
+  assert.equal(db.prepare('PRAGMA user_version').get().user_version, migrations.at(-1).version)
+
   const store = libraryStore(db)
-  // Settings survive a reopen and default to an empty value when never written.
-  assert.equal(store.setting('default_description'), null)
-  store.saveSetting('default_description', '默认简介测试')
-  const entry = { relative: '电影/片名 (2024).mp4', stamp: { size: 900, mtime: 100 } }
-  const first = store.transact(() => indexMedia(store, entry, true, 'scan', new Set()))
-  const title = store.cards('', null)[0]
-  assert.equal(title.title, '片名')
-  store.editTitle(title.id, { title: '手动片名', description: '简介', year: 2025, poster_path: null })
-  const repeat = store.transact(() => indexMedia(store, { ...entry, stamp: { size: 901, mtime: 200 } }, true, 'scan', new Set()))
-  assert.equal(repeat.id, first.id)
-  assert.equal(repeat.added, false)
-  const other = openDatabase(name)
+  store.transact(() => indexMedia(store, entry('观潮日记.mp4'), true))
+  const card = store.browse({ q: '', kind: null, actor: null, sort: 'newest', page: 1, pageSize: 10 }).items[0]
+  assert.equal(card.title, '观潮日记')
+
+  // Reopening keeps the rows, because the schema version matches.
+  const reopened = openDatabase(name)
   try {
-    const reopened = libraryStore(other)
-    assert.equal(reopened.setting('default_description'), '默认简介测试')
-    const persisted = reopened.detail(title.id)
-    assert.equal(persisted.description, '简介')
-    assert.equal(persisted.year, 2025)
-    assert.equal(persisted.title, '手动片名')
-    assert.equal(persisted.movie.id, first.id)
-  } finally { other.close() }
+    const again = libraryStore(reopened)
+    assert.equal(again.browse({ q: '', kind: null, actor: null, sort: 'newest', page: 1, pageSize: 10 }).total, 1)
+  } finally { reopened.close() }
 })
 
-test('rich metadata drives browse filters, sorting and home rails', async (t) => {
+test('an incompatible database is rebuilt instead of refusing to start', async (t) => {
+  const { db, name } = await database(t)
+  // Pretend the file came from an older build.
+  db.exec('PRAGMA user_version = 4')
+  db.close()
+
+  const rebuilt = openDatabase(name)
+  try {
+    assert.equal(rebuilt.prepare('PRAGMA user_version').get().user_version, migrations.at(-1).version)
+    // The rebuilt schema is empty and usable.
+    assert.equal((rebuilt.prepare('SELECT COUNT(*) AS n FROM titles').get()).n, 0)
+  } finally { rebuilt.close() }
+})
+
+test('re-indexing the same path keeps its id and its edited title', async (t) => {
   const { db } = await database(t)
   const store = libraryStore(db)
-  const base = {
-    description: '简介', poster_path: null, original_title: null, genres: '[]', region: null,
-    rating: null, runtime: null, director: null, cast_members: '[]', backdrop_path: null,
+  const first = store.transact(() => indexMedia(store, entry('电影/片名 (2024).mp4', 900), true))
+  const title = store.browse({ q: '', kind: null, actor: null, sort: 'newest', page: 1, pageSize: 10 }).items[0]
+  assert.equal(title.title, '片名')
+
+  store.editTitle(title.id, {
+    title: '手动片名', year: 2025, description: '简介', poster_path: null,
+    cast_members: JSON.stringify(['演员甲']),
+  })
+  const repeat = store.transact(() => indexMedia(store, entry('电影/片名 (2024).mp4', 901), true))
+  assert.equal(repeat.id, first.id)
+  // The hand-edited title wins over the filename.
+  assert.equal(store.title(title.id).title, '手动片名')
+  assert.deepEqual(JSON.parse(store.title(title.id).cast_members), ['演员甲'])
+})
+
+test('episode files group into one series with ordered slots', async (t) => {
+  const { db } = await database(t)
+  const store = libraryStore(db)
+  for (const number of [3, 1, 2]) {
+    store.transact(() => indexMedia(store, entry(`漫剧/淫妻派对 第${number}集.mp4`), true))
   }
-  const add = (metadata, key) => {
-    const titleId = store.createTitle('movie', { ...base, ...metadata }, key)
+  const titles = store.titles()
+  const series = titles.filter(title => title.kind === 'series')
+  assert.equal(series.length, 1, 'all episodes share one title')
+  assert.equal(series[0].title, '淫妻派对')
+  const detail = store.detail(series[0].id)
+  assert.deepEqual(detail.episodes.map(episode => episode.episode), [1, 2, 3])
+  assert.ok(detail.episodes.every(episode => episode.media?.available))
+})
+
+test('deleting a file removes its title only when nothing else uses it', async (t) => {
+  const { db } = await database(t)
+  const store = libraryStore(db)
+  const users = userStore(db)
+
+  const solo = store.transact(() => indexMedia(store, entry('甲片.mp4'), true))
+  const soloTitle = store.fileAt(pathKey('甲片.mp4'))?.title_id
+  const user = users.create('影迷', await hashPassword('123456'))
+  users.addFavorite(user.id, soloTitle)
+
+  // A series keeps its title while another episode still has a file.
+  store.transact(() => indexMedia(store, entry('乙剧 第01集.mp4'), true))
+  store.transact(() => indexMedia(store, entry('乙剧 第02集.mp4'), true))
+  const seriesTitle = store.titles().find(title => title.title === '乙剧').id
+
+  // Removing the bytes is what deletes: the row goes, then the orphan title.
+  store.deleteFile(solo.id)
+  pruneOrphans(store)
+  assert.equal(store.title(soloTitle), undefined)
+  assert.equal(store.files().length, 2)
+
+  const episodeRow = store.files().find(row => row.relative_path === '乙剧 第01集.mp4')
+  store.deleteFile(episodeRow.id)
+  pruneOrphans(store)
+  assert.equal(store.title(seriesTitle)?.title, '乙剧', 'the series survives one lost episode')
+  assert.equal(store.files().length, 1)
+
+  // A favourite outlives a file disappearing.
+  assert.equal(users.hasFavorite(user.id, soloTitle), true)
+  assert.deepEqual(users.favorites(user.id), [])
+})
+
+test('browse filters by actor and orders by title or recency', async (t) => {
+  const { db } = await database(t)
+  const store = libraryStore(db)
+  const add = (relative, cast, identity) => {
+    const titleId = store.createTitle('movie', {
+      title: identity, year: 2020, description: '', poster_path: null,
+      cast_members: JSON.stringify(cast),
+    }, identity)
     store.createFile({
-      relative_path: `${key}.mp4`, path_key: `${key}.mp4`, size: 10, mtime: 1, state: 'published',
-      available: 1, valid_mp4: 1, reason: null, source: 'scan', title_id: titleId, episode_id: null,
+      relative_path: relative, path_key: relative, size: 1, mtime: 1, available: 1,
+      title_id: titleId, episode_id: null,
     })
     return titleId
   }
-  const sciFi = add({ title: '甲片', year: 2023, rating: 8.6, region: '中国', genres: '["科幻"]' }, 'a')
-  add({ title: '乙片', year: 2019, rating: 7.2, region: '日本', genres: '["剧情"]' }, 'b')
-  add({ title: '丙片', year: 2025, rating: 9.1, region: '中国', genres: '["科幻","剧情"]' }, 'c')
+  add('a.mp4', ['演员甲'], '甲片')
+  add('b.mp4', ['演员乙'], '乙片')
+  add('c.mp4', ['演员甲'], '丙片')
 
-  const all = store.browse({ q: '', kind: null, genre: null, region: null, yearFrom: null, yearTo: null, minRating: null, sort: 'newest', page: 1, pageSize: 24 })
+  const all = store.browse({ q: '', kind: null, actor: null, sort: 'title', page: 1, pageSize: 10 })
   assert.equal(all.total, 3)
-  assert.deepEqual(all.facets.genres.sort(), ['剧情', '科幻'].sort())
-  assert.deepEqual(all.facets.regions.sort(), ['中国', '日本'].sort())
+  assert.deepEqual(all.items.map(item => item.title).sort(), ['丙片', '乙片', '甲片'].sort())
 
-  const onlySciFi = store.browse({ q: '', kind: null, genre: '科幻', region: null, yearFrom: null, yearTo: null, minRating: null, sort: 'newest', page: 1, pageSize: 24 })
-  assert.equal(onlySciFi.total, 2)
+  const filtered = store.browse({ q: '', kind: null, actor: '演员甲', sort: 'title', page: 1, pageSize: 10 })
+  assert.equal(filtered.total, 2)
+  assert.deepEqual(filtered.items.map(item => item.title).sort(), ['丙片', '甲片'].sort())
 
-  const china = store.browse({ q: '', kind: null, genre: null, region: '中国', yearFrom: 2020, yearTo: null, minRating: 8, sort: 'rating', page: 1, pageSize: 24 })
-  assert.deepEqual(china.items.map(item => item.title), ['丙片', '甲片'])
-
-  const paged = store.browse({ q: '', kind: null, genre: null, region: null, yearFrom: null, yearTo: null, minRating: null, sort: 'title', page: 2, pageSize: 2 })
+  const paged = store.browse({ q: '', kind: null, actor: null, sort: 'title', page: 2, pageSize: 2 })
   assert.equal(paged.total, 3)
   assert.equal(paged.items.length, 1)
 
-  const home = store.home()
-  assert.equal(home.total, 3)
-  assert.equal(home.heroes[0].rating, 9.1, 'the best rated title leads the hero')
-  assert.ok(home.rails.some(rail => rail.id === 'genre-科幻'))
-  const detail = store.detail(sciFi)
-  assert.deepEqual(detail.genres, ['科幻'])
-  assert.equal(detail.region, '中国')
+  // Actors are derived from cast lists, never stored separately.
+  const actors = store.actors()
+  assert.equal(actors.find(actor => actor.name === '演员甲')?.count, 2)
 })
 
 test('visitor accounts and favourites persist across a reopen', async (t) => {
   const { db, name } = await database(t)
   const store = libraryStore(db)
   const users = userStore(db)
-  const entry = { relative: '收藏持久化 (2024).mp4', stamp: { size: 500, mtime: 10 } }
-  store.transact(() => indexMedia(store, entry, true, 'scan', new Set()))
-  const title = store.cards('', null)[0]
+  store.transact(() => indexMedia(store, entry('收藏持久化 (2024).mp4'), true))
+  const title = store.browse({ q: '', kind: null, actor: null, sort: 'newest', page: 1, pageSize: 10 }).items[0]
   const hash = await hashPassword('123456')
   const user = users.create('影迷', hash)
   assert.ok(user)
-  // Names are compared case-insensitively and cannot be registered twice.
   assert.equal(users.byName('影迷')?.id, user.id)
-  assert.equal(users.create('影迷', hash), null)
+  assert.equal(users.create('影迷', hash), null, 'names are unique and case-insensitive')
   users.addFavorite(user.id, title.id)
 
   const reopened = openDatabase(name)
   try {
     const again = userStore(reopened)
-    // A 6-character password is accepted by the new policy and still verifies.
     assert.equal(await verifyPassword('123456', again.byName('影迷')?.password_hash), true)
     assert.equal(again.hasFavorite(user.id, title.id), true)
     const favorites = again.favorites(user.id)
@@ -123,7 +189,7 @@ test('visitor accounts and favourites persist across a reopen', async (t) => {
   } finally { reopened.close() }
 })
 
-test('scrypt credentials are salted and reset invalidates existing sessions', async (t) => {
+test('scrypt credentials are salted and a reset invalidates sessions', async (t) => {
   const { db } = await database(t)
   const password = '测试用-长度足够-password'
   const old = await hashPassword(password)
@@ -134,7 +200,7 @@ test('scrypt credentials are salted and reset invalidates existing sessions', as
   assert.equal(await verifyPassword(password + 'different', old), false)
   setAdmin(db, '管理员', old)
   const admins = adminStore(db)
-  admins.add('hashed-session', Date.now() + 10000)
+  admins.add('hashed-session', Date.now() + 10_000)
   assert.equal(admins.find('hashed-session', Date.now()).username, '管理员')
   setAdmin(db, '夜灯', current)
   assert.equal(admins.find('hashed-session', Date.now()), undefined)

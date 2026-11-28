@@ -33,11 +33,14 @@ onBeforeUnmount(stop)
 watch(() => props.items.length, start)
 watch(index, start)
 
-const rating = computed(() => current.value?.rating ? current.value.rating.toFixed(1) : null)
 const meta = computed(() => {
   const item = current.value
   if (!item) return []
-  return [item.year ? String(item.year) : null, item.kind === 'series' ? '剧集' : '电影', ...item.genres.slice(0, 2)].filter(Boolean) as string[]
+  return [
+    item.year ? String(item.year) : null,
+    item.kind === 'series' ? '剧集' : '电影',
+    item.runtime ? `${item.runtime} 分钟` : null,
+  ].filter(Boolean) as string[]
 })
 </script>
 
@@ -51,7 +54,7 @@ const meta = computed(() => {
         :class="{ 'is-active': i === index }"
         :aria-hidden="i !== index"
       >
-        <MovieArt :src="item.backdropUrl ?? item.posterUrl" :title="item.title" ratio="wide" :priority="i === 0" :show-caption="false" />
+        <MovieArt :src="item.posterUrl" :title="item.title" ratio="wide" :priority="i === 0" :show-caption="false" />
       </div>
       <div class="hero-scrim" aria-hidden="true" />
     </div>
@@ -61,18 +64,16 @@ const meta = computed(() => {
         <span class="hero-dot" aria-hidden="true" />本周精选
       </p>
       <h1 class="hero-title">{{ current.title }}</h1>
-      <p v-if="current.originalTitle" class="hero-original">{{ current.originalTitle }}</p>
       <p class="hero-meta">
-        <span v-if="rating" class="hero-rating">★ {{ rating }}</span>
         <template v-for="(part, i) in meta" :key="part">
-          <span v-if="i > 0 || rating" class="hero-sep" aria-hidden="true">·</span>
+          <span v-if="i > 0" class="hero-sep" aria-hidden="true">·</span>
           <span>{{ part }}</span>
         </template>
       </p>
       <p class="hero-actions">
         <NuxtLink :to="`/watch/${encodeURIComponent(current.id)}`" class="btn btn--primary hero-btn">
           <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M8.5 5.5 18.5 12l-10 6.5z" fill="currentColor" /></svg>
-          {{ current.available ? '立即播放' : '查看详情' }}
+          立即播放
         </NuxtLink>
         <NuxtLink :to="`/movie/${encodeURIComponent(current.id)}`" class="btn btn--ghost hero-btn">
           查看详情

@@ -11,13 +11,34 @@ export interface UserRecord {
   created_at: string
 }
 
-// Display-only card for a favourite; the catalog's own visibility rules are
-// applied by the caller before this is used.
-export interface FavoriteRow extends UserRecord {
+export interface ProgressRow {
   title_id: string
+  episode_id: string
+  position: number
+  duration: number
+  updated_at: string
+  title: string
+  kind: 'movie' | 'series'
+  poster_path: string | null
+  year: number | null
+  created_at: string
+  cast_members: string
+  episode_season: number | null
+  episode_number: number | null
 }
 
 export function userStore(db: DatabaseSync) {
+  const cardOf = (row: { id: string; kind: 'movie' | 'series'; title: string; year: number | null; poster_path: string | null; cast_members: string; created_at: string }): LibraryCard => ({
+    id: row.id,
+    kind: row.kind,
+    title: row.title,
+    year: row.year,
+    posterUrl: row.poster_path ? `/api/posters/${row.id}` : null,
+    runtime: null,
+    cast: parseList(row.cast_members),
+    addedAt: row.created_at,
+  })
+
   const sql = {
     byName: db.prepare('SELECT * FROM users WHERE username = ? COLLATE NOCASE'),
     byId: db.prepare('SELECT * FROM users WHERE id = ?'),
@@ -34,26 +55,27 @@ export function userStore(db: DatabaseSync) {
     removeFavorite: db.prepare('DELETE FROM favorites WHERE user_id = ? AND title_id = ?'),
     favoriteIds: db.prepare('SELECT title_id FROM favorites WHERE user_id = ? ORDER BY created_at DESC'),
     hasFavorite: db.prepare('SELECT 1 AS hit FROM favorites WHERE user_id = ? AND title_id = ?'),
-    catalog: db.prepare(`SELECT t.* FROM favorites f JOIN titles t ON t.id = f.title_id
-      WHERE f.user_id = ? AND EXISTS (SELECT 1 FROM media_files m WHERE m.title_id = t.id AND m.state = 'published')
+    catalog: db.prepare(`SELECT t.id, t.kind, t.title, t.year, t.poster_path, t.cast_members, t.created_at
+      FROM favorites f JOIN titles t ON t.id = f.title_id
+      WHERE f.user_id = ? AND EXISTS (SELECT 1 FROM media_files m WHERE m.title_id = t.id)
       ORDER BY f.created_at DESC`),
     available: db.prepare(`SELECT EXISTS (SELECT 1 FROM media_files p WHERE p.title_id = ?
-      AND p.state = 'published' AND p.available = 1) AS available`),
+      AND p.available = 1) AS available`),
     saveProgress: db.prepare(`INSERT INTO playback_progress (user_id, title_id, episode_id, position, duration, updated_at)
       VALUES (?, ?, ?, ?, ?, ?)
       ON CONFLICT (user_id, title_id, episode_id) DO UPDATE SET
         position = excluded.position, duration = excluded.duration, updated_at = excluded.updated_at`),
     clearProgress: db.prepare('DELETE FROM playback_progress WHERE user_id = ? AND title_id = ? AND episode_id = ?'),
     clearTitleProgress: db.prepare('DELETE FROM playback_progress WHERE user_id = ? AND title_id = ?'),
-    // Only rows whose title is still published and playable are worth resuming.
+    // Only rows whose title still has a playable file are worth resuming.
     recentProgress: db.prepare(`SELECT p.title_id, p.episode_id, p.position, p.duration, p.updated_at,
-        t.title, t.kind, t.poster_path, t.backdrop_path, t.year, t.original_title, t.genres, t.rating, t.created_at,
-        e.season AS episode_season, e.episode AS episode_number, e.title AS episode_title
+        t.title, t.kind, t.poster_path, t.year, t.created_at, t.cast_members,
+        e.season AS episode_season, e.episode AS episode_number
       FROM playback_progress p
       JOIN titles t ON t.id = p.title_id
       LEFT JOIN episodes e ON e.id = p.episode_id AND p.episode_id <> ''
       WHERE p.user_id = ? AND EXISTS (
-        SELECT 1 FROM media_files m WHERE m.title_id = t.id AND m.state = 'published' AND m.available = 1)
+        SELECT 1 FROM media_files m WHERE m.title_id = t.id AND m.available = 1)
       ORDER BY p.updated_at DESC LIMIT ?`),
   }
 
@@ -91,16 +113,11 @@ export function userStore(db: DatabaseSync) {
     },
     hasFavorite: (userId: string, titleId: string) => Boolean(sql.hasFavorite.get(userId, titleId)),
     favoriteIds: (userId: string) => (sql.favoriteIds.all(userId) as unknown as { title_id: string }[]).map(row => row.title_id),
-    favorites: (userId: string): LibraryCard[] => (sql.catalog.all(userId) as unknown as {
-      id: string; kind: 'movie' | 'series'; title: string; year: number | null; poster_path: string | null
-      backdrop_path: string | null; rating: number | null; genres: string; created_at: string; original_title: string | null
-    }[]).map(row => ({
-      id: row.id, kind: row.kind, title: row.title, originalTitle: row.original_title, year: row.year,
-      posterUrl: row.poster_path ? `/api/posters/${row.id}` : null,
-      backdropUrl: row.backdrop_path ? `/api/posters/${row.id}?variant=backdrop` : null,
-      rating: row.rating, genres: parseList(row.genres), addedAt: row.created_at,
-      available: Boolean((sql.available.get(row.id) as unknown as { available: 0 | 1 }).available),
-    })),
+    favorites: (userId: string): LibraryCard[] =>
+      (sql.catalog.all(userId) as unknown as Parameters<typeof cardOf>[0][]).map(row => ({
+        ...cardOf(row),
+        available: Boolean((sql.available.get(row.id) as unknown as { available: 0 | 1 }).available),
+      })),
     // Saving a finished title clears its progress instead of leaving a 100% row.
     saveProgress(userId: string, titleId: string, episodeId: string, position: number, duration: number) {
       sql.saveProgress.run(userId, titleId, episodeId, position, duration, new Date().toISOString())
@@ -110,27 +127,8 @@ export function userStore(db: DatabaseSync) {
     },
     clearTitleProgress: (userId: string, titleId: string) => { sql.clearTitleProgress.run(userId, titleId) },
     recentProgress: (userId: string, limit: number): ProgressRow[] => sql.recentProgress.all(userId, limit) as unknown as ProgressRow[],
+    cardOf,
   }
-}
-
-export interface ProgressRow {
-  title_id: string
-  episode_id: string
-  position: number
-  duration: number
-  updated_at: string
-  title: string
-  kind: 'movie' | 'series'
-  poster_path: string | null
-  backdrop_path: string | null
-  year: number | null
-  original_title: string | null
-  genres: string
-  rating: number | null
-  created_at: string
-  episode_season: number | null
-  episode_number: number | null
-  episode_title: string | null
 }
 
 export type UserStore = ReturnType<typeof userStore>

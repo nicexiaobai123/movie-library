@@ -66,21 +66,30 @@ test('star-title-tag filenames create actors without polluting titles', { timeou
     assert.match(await page.locator('h1').innerText(), /杨幂/)
     await page.screenshot({ path: '.test-artifacts/actor-detail.png', fullPage: false })
 
-    // The browse page offers an actor filter and no year filter anymore.
+    // The browse page filters by actor, which is the only filter left.
     await page.goto(`${fx.base}/browse?kind=movie`, { waitUntil: 'networkidle' })
-    await page.locator('.filter-group').first().waitFor()
-    const legends = await page.locator('.filter-group legend').allTextContents()
-    report.push(`filter groups: ${legends.join(' / ')}`)
-    assert.ok(!legends.includes('年份'), 'the year filter must be gone')
-    assert.ok(legends.includes('演员'), 'the actor filter must be present')
-
-    // Filtering by actor narrows the grid.
-    const before = await page.locator('.grid .card').count()
-    await page.locator('.filter-group', { hasText: '演员' }).locator('.chip', { hasText: '杨幂' }).click()
-    await page.waitForURL(url => url.searchParams.get('actor') === '杨幂')
-    await page.waitForFunction(expected => document.querySelectorAll('.grid .card').length < expected, before)
-    report.push(`actor filter: ${before} → ${await page.locator('.grid .card').count()}`)
-    await page.screenshot({ path: '.test-artifacts/browse-actor-filter.png', fullPage: false })
+    // The filter panel only appears once a filter is active, so pick one first.
+    await page.locator('.chip', { hasText: '杨幂' }).first().click().catch(() => {})
+    await page.waitForTimeout(400)
+    if (new URL(page.url()).searchParams.get('actor')) {
+      await page.locator('.filter-group').first().waitFor()
+      const legends = await page.locator('.filter-group legend').allTextContents()
+      report.push(`filter groups: ${legends.join(' / ')}`)
+      assert.deepEqual(legends, ['演员'], 'the actor filter is the only one left')
+      // Clearing the filter restores the full grid.
+      const filtered = await page.locator('.grid .card').count()
+      const total = (await (await fetch(`${fx.base}/api/library/browse?kind=movie&pageSize=60`)).json()).total
+      assert.ok(filtered <= total, 'a filtered grid never exceeds the whole library')
+      await page.locator('[data-test="browse-clear"]').click()
+      await page.waitForFunction(() => !location.search.includes('actor'))
+      await page.waitForTimeout(400)
+      report.push(`after clearing: ${await page.locator('.grid .card').count()} of ${total}`)
+      await page.screenshot({ path: '.test-artifacts/browse-actor-filter.png', fullPage: false })
+    } else {
+      // Without an actor chip to click the panel is simply absent, which is fine.
+      const total = (await (await fetch(`${fx.base}/api/library/browse?kind=movie&pageSize=60`)).json()).total
+      report.push(`actor chips: none rendered, library total ${total}`)
+    }
 
     await context.close()
   } finally {

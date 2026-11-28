@@ -1,5 +1,4 @@
 import type { ContinueWatching, ContinueWatchingItem, ProgressInput } from '../../shared/types/library.ts'
-import { card } from '../db/library.ts'
 import type { ProgressRow, UserRecord, UserStore } from '../db/users.ts'
 import { LibraryError } from '../domain/errors.ts'
 import type { LibraryStore } from '../db/library.ts'
@@ -15,16 +14,18 @@ export function createProgress(users: UserStore, library: LibraryStore) {
   }
 
   function toItem(row: ProgressRow): ContinueWatchingItem {
-    const base = card({
-      id: row.title_id, kind: row.kind, title: row.title, year: row.year,
-      description: '', poster_path: row.poster_path, identity_key: null, created_at: row.created_at,
-      original_title: row.original_title, genres: row.genres, region: null, rating: row.rating,
-      runtime: null, director: null, cast_members: '[]', backdrop_path: row.backdrop_path,
-      available: 1,
+    const base = users.cardOf({
+      id: row.title_id,
+      kind: row.kind,
+      title: row.title,
+      year: row.year,
+      poster_path: row.poster_path,
+      cast_members: row.cast_members,
+      created_at: row.created_at,
     })
     const episodeLabel = row.episode_number === null
       ? null
-      : `第 ${row.episode_season ?? 1} 季第 ${row.episode_number} 集${row.episode_title ? ` · ${row.episode_title}` : ''}`
+      : `第 ${row.episode_season ?? 1} 季第 ${row.episode_number} 集`
     const percent = row.duration > 0 ? Math.min(100, Math.round((row.position / row.duration) * 100)) : 0
     return { ...base, episodeId: row.episode_id || null, episodeLabel, position: row.position, duration: row.duration, percent }
   }

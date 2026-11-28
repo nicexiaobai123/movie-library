@@ -1,30 +1,29 @@
-import { randomUUID } from 'node:crypto'
 import type { FileHandle } from 'node:fs/promises'
 import { extname, posix } from 'node:path'
-import type { AdminLibrary, AdminMedia, AdminSettings, BulkEditItem, BulkEditResult, MediaEdit } from '../../shared/types/library.ts'
-import type { AdminMediaRecord, LibraryStore, MediaRecord } from '../db/library.ts'
-import { parseList, serializeList } from '../db/library.ts'
+import { randomUUID } from 'node:crypto'
+import type { AdminLibrary, AdminMedia, ClassifyInput, ClassifyResult, MediaEdit } from '../../shared/types/library.ts'
+import type { AdminMediaRecord, LibraryStore } from '../db/library.ts'
+import { adminMedia, parseList } from '../db/library.ts'
+import { recognize } from '../domain/recognition.ts'
 import type { LibraryConfig } from '../domain/config.ts'
 import { errorCode, LibraryError } from '../domain/errors.ts'
-import { recognize, titleIdentity } from '../domain/recognition.ts'
 import { posterMime, readDuration, validMp4, verifyPoster } from '../storage/formats.ts'
-import { assertFileName, ensureMediaDirectory, inspectMediaFile, isMissing, openMediaFile, pathKey, posterFolder, resolveMediaRoot, sameStamp, uploadFolder, videoFileName } from '../storage/paths.ts'
+import {
+  assertFileName, ensureMediaDirectory, inspectMediaFile, isMissing, openMediaFile, pathKey,
+  posterFolder, resolveMediaRoot, sameStamp, uploadFolder, videoFileName,
+} from '../storage/paths.ts'
 import { placeFile, receiveFile } from '../storage/uploads.ts'
 import type { UploadInput } from '../storage/uploads.ts'
-import { indexMedia, pendingClaims } from './index-media.ts'
+import { indexMedia } from './index-media.ts'
+import { pruneOrphans } from './index-media.ts'
 import { createScanner } from './scanner.ts'
-import { readSettings, saveSettings } from './settings.ts'
 
 const imageLimit = 8 * 1024 ** 2
 const noFile = '文件不存在或暂不可用。'
 
-function adminMedia(row: AdminMediaRecord): AdminMedia {
-  return {
-    id: row.id, fileName: posix.basename(row.relative_path), relativePath: row.relative_path, state: row.state,
-    available: Boolean(row.available), reason: row.reason ?? (row.available ? null : noFile), size: row.size,
-    source: row.source, addedAt: row.added_at, titleId: row.title_id, season: row.season, episode: row.episode,
-    episodeTitle: row.episode_title, suggestion: recognize(row.relative_path).suggestion,
-  }
+// A filename, read the same way the scanner reads it, is the fallback title.
+function basename(relativePath: string): string {
+  return recognize(relativePath).title
 }
 
 function transferFailure(error: unknown): never {
@@ -49,6 +48,8 @@ export function createCatalog(store: LibraryStore, config: LibraryConfig) {
     return adminMedia(row)
   }
 
+  // Uploading drops the file into the media folder, exactly like copying it there;
+  // the same indexing path then gives it a title.
   async function uploadVideo(input: UploadInput): Promise<AdminMedia> {
     const name = assertFileName(input.name)
     if (!videoFileName(name)) throw new LibraryError(415, '请选择 MP4 视频，且不要使用临时文件名。')
@@ -59,7 +60,6 @@ export function createCatalog(store: LibraryStore, config: LibraryConfig) {
     try {
       const root = await resolveMediaRoot(config.mediaRoot)
       const directory = await ensureMediaDirectory(root, uploadFolder)
-      // The duration is captured during validation, while the file is still open.
       let duration: number | null = null
       const staged = await receiveFile(root, input, config.maxUploadBytes, async (file, size) => {
         if (!await validMp4(file, size)) throw new LibraryError(422, '文件不是完整的 MP4，无法入库。')
@@ -68,7 +68,7 @@ export function createCatalog(store: LibraryStore, config: LibraryConfig) {
       try {
         await placeFile(root, staged.path, directory, name)
         const stamp = await inspectMediaFile(root, relative)
-        const id = store.transact(() => indexMedia(store, { relative, stamp }, true, 'upload', pendingClaims(store.files()), duration).id)
+        const id = store.transact(() => indexMedia(store, { relative, stamp }, true, duration).id)
         return fileForAdmin(id)
       } finally {
         await staged.dispose()
@@ -116,8 +116,8 @@ export function createCatalog(store: LibraryStore, config: LibraryConfig) {
     }
   }
 
-  async function poster(id: string, variant: 'poster' | 'backdrop' = 'poster') {
-    const relative = variant === 'backdrop' ? store.backdropPath(id) : store.posterPath(id)
+  async function poster(id: string) {
+    const relative = store.posterPath(id)
     if (!relative) throw new LibraryError(404, '未找到海报。')
     try {
       return await openPoster(relative)
@@ -129,19 +129,19 @@ export function createCatalog(store: LibraryStore, config: LibraryConfig) {
   }
 
   async function video(id: string) {
-    const row = store.publishedFile(id)
+    const row = store.adminFile(id)
     if (!row?.available || !videoFileName(row.relative_path)) throw new LibraryError(404, noFile)
     return openVideoFile(row)
   }
 
-  // Anyone with an admin session may read a pending file to grab its first frame.
+  // Anyone with an admin session may read a file to grab its first frame.
   async function preview(id: string) {
     const row = store.adminFile(id)
-    if (!row?.available || !row.valid_mp4 || !videoFileName(row.relative_path)) throw new LibraryError(404, noFile)
+    if (!row?.available || !videoFileName(row.relative_path)) throw new LibraryError(404, noFile)
     return openVideoFile(row)
   }
 
-  async function openVideoFile(row: Pick<MediaRecord, 'relative_path' | 'size' | 'mtime' | 'file_version'>) {
+  async function openVideoFile(row: { relative_path: string; size: number; mtime: number }) {
     try {
       const root = await resolveMediaRoot(config.mediaRoot)
       const verified = await openMediaFile(root, row.relative_path)
@@ -149,7 +149,7 @@ export function createCatalog(store: LibraryStore, config: LibraryConfig) {
         await verified.file.close().catch(() => {})
         throw new LibraryError(404, '文件有变化，等扫描确认后即可访问。')
       }
-      return { file: verified.file, size: verified.stamp.size, mtime: verified.stamp.mtime, version: row.file_version, name: posix.basename(row.relative_path) }
+      return { file: verified.file, size: verified.stamp.size, mtime: verified.stamp.mtime, name: posix.basename(row.relative_path) }
     } catch (error) {
       if (isMissing(error) || (error instanceof LibraryError && error.status === 400)) throw new LibraryError(404, noFile)
       if (error instanceof LibraryError) throw error
@@ -157,6 +157,7 @@ export function createCatalog(store: LibraryStore, config: LibraryConfig) {
     }
   }
 
+  // Editing changes the title (and where this file sits in a series), never the file.
   async function edit(id: string, input: MediaEdit): Promise<AdminMedia> {
     const before = store.adminFile(id)
     if (!before) throw new LibraryError(404, '未找到这条文件记录。')
@@ -166,160 +167,142 @@ export function createCatalog(store: LibraryStore, config: LibraryConfig) {
         await image.file.close()
       } catch (error) {
         if (error instanceof LibraryError && error.status === 503) throw error
-        throw new LibraryError(422, '海报必须是媒体目录内不大于 8 MiB 的可读 JPG、PNG 或 WebP 文件。')
+        throw new LibraryError(422, '封面必须是媒体目录内不大于 8 MiB 的可读 JPG、PNG 或 WebP 文件。')
       }
     }
-    if (before.state === 'pending') {
-      if (!before.available || !before.valid_mp4) throw new LibraryError(422, '请先恢复或替换媒体文件，再扫描并整理。')
-      const root = await resolveMediaRoot(config.mediaRoot)
-      try {
-        const stamp = await inspectMediaFile(root, before.relative_path)
-        if (!sameStamp(before, stamp)) throw new LibraryError(409, '文件有变化，请重新扫描后整理。')
-      } catch (error) {
-        if (isMissing(error)) throw new LibraryError(409, '文件已不在该位置，请重新扫描。')
-        if (error instanceof LibraryError) throw error
-        throw new LibraryError(503, '无法复查这个媒体文件，请检查媒体目录。')
-      }
-    }
-    return store.transact(() => applyEdit(before, input))
+    return store.transact(() => applyEdit(before.id, input))
   }
 
-  // Shared by single and bulk publishing so both obey exactly the same rules.
-  function applyEdit(before: AdminMediaRecord, input: MediaEdit): AdminMedia {
-    const row = store.adminFile(before.id)
-    if (!row || before.file_version !== row.file_version || before.state !== row.state) {
-      throw new LibraryError(409, '入库状态已变化，请刷新后重试。')
-    }
+  function applyEdit(id: string, input: MediaEdit): AdminMedia {
+    const row = store.adminFile(id)
+    if (!row) throw new LibraryError(404, '未找到这条文件记录。')
     const metadata = {
-      title: input.title, year: input.year, description: input.description, poster_path: input.posterPath,
-      original_title: input.originalTitle, genres: serializeList(input.genres), region: input.region,
-      rating: input.rating, runtime: input.runtime, director: input.director,
-      cast_members: serializeList(input.cast), backdrop_path: input.backdropPath,
+      title: input.title,
+      year: input.year,
+      description: input.description,
+      poster_path: input.posterPath,
+      cast_members: JSON.stringify(input.cast),
     }
-    let titleId = input.titleId
-    if (!titleId && row.title_id) {
-      const current = store.title(row.title_id)
-      if (current?.kind === input.kind && current.title === input.title && current.year === input.year) titleId = current.id
-    }
+    let titleId = row.title_id
     if (titleId) {
       const current = store.title(titleId)
-      if (!current) throw new LibraryError(404, '要关联的影片不存在，请刷新列表。')
-      if (current.kind !== input.kind) throw new LibraryError(422, '已有条目的类型不能修改，请选择相符条目或新建。')
+      if (!current) throw new LibraryError(404, '关联的影片已不存在，请刷新列表。')
+      if (current.kind !== input.kind) {
+        // Changing the kind of an existing title would leave its files inconsistent.
+        throw new LibraryError(422, '已有条目的电影/剧集类型不能修改。')
+      }
       store.editTitle(titleId, metadata)
     } else {
-      const key = titleIdentity(input.kind, input.title, input.year)
-      titleId = store.createTitle(input.kind, metadata, store.findIdentity(key) ? null : key)
+      titleId = store.createTitle(input.kind, metadata, null)
     }
+
     let episodeId: string | null = null
     if (input.kind === 'series') {
       if (input.season === null || input.episode === null) throw new LibraryError(422, '剧集需要季号和集号。')
-      const target = store.episodeAt(titleId, input.season, input.episode)
-      if (target) episodeId = target.id
-      else if (row.title_id === titleId && row.episode_id) episodeId = row.episode_id
-      else episodeId = store.createEpisode(titleId, input.season, input.episode, input.episodeTitle)
+      const slot = store.episodeAt(titleId, input.season, input.episode)
+      episodeId = slot?.id ?? store.createEpisode(titleId, input.season, input.episode)
     }
-    const occupied = store.publishedFor(titleId, episodeId)
-    if (occupied && occupied.id !== row.id) {
-      if (!input.replaceExisting) throw new LibraryError(409, '该影片或集号已有文件，请改选位置，或明确选择替换。', 'SLOT_OCCUPIED')
-      store.associate(occupied.id, { state: 'pending', title_id: null, episode_id: null, reason: '管理员将另一个文件关联到该位置，原文件已转入待整理。' })
-    }
-    if (episodeId && input.season !== null && input.episode !== null) {
-      store.editEpisode(episodeId, input.season, input.episode, input.episodeTitle)
-    }
-    store.associate(row.id, { state: 'published', title_id: titleId, episode_id: episodeId, reason: row.valid_mp4 ? null : row.reason })
-    return fileForAdmin(before.id)
+    store.associate(row.id, titleId, episodeId)
+    return fileForAdmin(row.id)
   }
 
-  // Bulk work is best-effort: each file commits or fails on its own so one
-  // conflict never undoes the files that were already handled.
-  async function publishMany(items: BulkEditItem[]): Promise<BulkEditResult> {
-    const fallbackDescription = readSettings(store).defaultDescription
-    const published: AdminMedia[] = []
-    const skipped: BulkEditResult['skipped'] = []
-    for (const item of items) {
-      const before = store.adminFile(item.id)
-      if (!before) {
-        skipped.push({ id: item.id, fileName: '', message: '未找到这条文件记录。' })
+  // Re-classifying a selection is the batch equivalent of one edit: the same title
+  // record is reused (so its cover and description survive), only its kind changes.
+  // For a series, files without an episode number get consecutive numbers in the
+  // order they were selected, which is what "select several and make them episodes"
+  // has to mean.
+  function classifyMany(input: ClassifyInput): ClassifyResult {
+    const chosen: AdminMediaRecord[] = []
+    const skipped: ClassifyResult['skipped'] = []
+    for (const id of input.ids) {
+      const row = store.adminFile(id)
+      if (!row) {
+        skipped.push({ id, message: '未找到这条文件记录。' })
         continue
       }
-      try {
-        if (item.mode === 'complete') {
-          await completeEntry(before, item, fallbackDescription)
-        } else {
-          if (before.state !== 'pending') throw new LibraryError(422, '这条文件已经发布，不需要再整理。')
-          if (!before.available || !before.valid_mp4) throw new LibraryError(422, '媒体文件暂不可用，请先恢复文件并扫描。')
-          const suggestion = recognize(before.relative_path).suggestion
-          const title = item.title ?? suggestion.title
-          if (!title) throw new LibraryError(422, '无法确定片名，请先填写片名。')
-          const kind = item.kind ?? suggestion.kind ?? 'movie'
-          const season = item.season ?? suggestion.season
-          const episode = item.episode ?? suggestion.episode
-          if (kind === 'series' && (season === null || episode === null)) {
-            throw new LibraryError(422, '无法确定季号或集号，请先手动整理这一集。')
-          }
-          const existing = before.title_id ? store.title(before.title_id) : undefined
-          await edit(before.id, {
-            titleId: item.titleId,
-            kind,
-            title,
-            year: item.year ?? suggestion.year,
-            description: item.description ?? fallbackDescription,
-            originalTitle: existing?.original_title ?? null,
-            genres: existing ? parseList(existing.genres) : [],
-            region: existing?.region ?? null,
-            rating: existing?.rating ?? null,
-            runtime: existing?.runtime ?? null,
-            director: existing?.director ?? null,
-            cast: existing ? parseList(existing.cast_members) : [],
-            posterPath: item.posterPath,
-            backdropPath: existing?.backdrop_path ?? null,
-            season: kind === 'series' ? season : null,
-            episode: kind === 'series' ? episode : null,
-            episodeTitle: item.episodeTitle ?? null,
-            replaceExisting: item.replaceExisting,
-          })
-        }
-        published.push(fileForAdmin(before.id))
-      } catch (error) {
-        skipped.push({
-          id: before.id, fileName: posix.basename(before.relative_path),
-          message: error instanceof LibraryError ? error.message : '保存失败，请稍后重试。',
-        })
-      }
+      chosen.push(row)
     }
-    return { published, skipped }
-  }
+    if (!chosen.length) throw new LibraryError(422, '请选择要分类的文件。')
 
-  // Fills in only what is still missing unless the caller explicitly overwrites,
-  // so a description or cover typed by hand is never silently replaced.
-  async function completeEntry(before: AdminMediaRecord, item: BulkEditItem, fallbackDescription: string) {
-    if (before.state !== 'published' || !before.title_id) throw new LibraryError(422, '这条文件还没有发布，无法补齐资料。')
-    const title = store.title(before.title_id)
-    if (!title) throw new LibraryError(404, '关联的影片已不存在，请刷新列表。')
-    const description = item.description ?? fallbackDescription
-    const nextDescription = title.description.trim() || item.overwrite ? description : title.description
-    const nextPoster = item.overwrite || !title.poster_path ? item.posterPath ?? title.poster_path : title.poster_path
-    if ((nextDescription === title.description) && (nextPoster === title.poster_path)) {
-      throw new LibraryError(422, '已有简介和封面，未做改动。')
-    }
-    store.transact(() => {
-      store.editTitle(title.id, {
-        title: title.title, year: title.year, description: nextDescription, poster_path: nextPoster,
-        original_title: title.original_title, genres: title.genres, region: title.region, rating: title.rating,
-        runtime: title.runtime, director: title.director, cast_members: title.cast_members,
-        backdrop_path: title.backdrop_path,
-      })
+    return store.transact((): ClassifyResult => {
+      const items: AdminMedia[] = []
+      let seriesTitleId: string | null = input.kind === 'series' ? input.titleId ?? null : null
+      if (input.kind === 'series' && seriesTitleId === null) {
+        const first = chosen[0]!
+        const current = first.title_id ? store.title(first.title_id) : undefined
+        if (current?.kind === 'series') {
+          seriesTitleId = current.id
+        } else {
+          seriesTitleId = store.createTitle('series', {
+            title: input.title?.trim() || current?.title || basename(first.relative_path),
+            year: current?.year ?? null,
+            description: current?.description ?? '',
+            poster_path: current?.poster_path ?? null,
+            cast_members: current?.cast_members ?? '[]',
+          }, null)
+        }
+      }
+
+      // Episodes keep their own numbers; the rest are appended after the highest one
+      // already in the series, in the order they were selected.
+      let season = input.season ?? 1
+      let nextEpisode = 1
+      if (input.kind === 'series' && seriesTitleId) {
+        const existing = store.episodesOf(seriesTitleId)
+        if (existing.length) {
+          season = input.season ?? existing[0]!.season
+          nextEpisode = Math.max(...existing.filter(ep => ep.season === season).map(ep => ep.episode)) + 1
+        }
+      }
+
+      for (const row of chosen) {
+        if (input.kind === 'series') {
+          const titleId = seriesTitleId!
+          const own = row.episode_id ? store.episode(row.episode_id) : undefined
+          const keep = own && own.title_id === titleId ? own : undefined
+          const targetSeason = keep ? keep.season : season
+          const number = keep ? keep.episode : nextEpisode++
+          const slot = store.episodeAt(titleId, targetSeason, number)
+          const episodeId = slot?.id ?? store.createEpisode(titleId, targetSeason, number)
+          store.associate(row.id, titleId, episodeId)
+        } else {
+          const current = row.title_id ? store.title(row.title_id) : undefined
+          if (current?.kind === 'movie') {
+            store.associate(row.id, current.id, null)
+          } else {
+            // Splitting a series back into films must not give every file the same
+            // name: the number that made them episodes is already in the filename, so
+            // read the title from the file rather than from the shared series record.
+            const titleId = store.createTitle('movie', {
+              title: basename(row.relative_path),
+              year: current?.year ?? null,
+              description: current?.description ?? '',
+              poster_path: null,
+              cast_members: current?.cast_members ?? '[]',
+            }, null)
+            store.associate(row.id, titleId, null)
+          }
+        }
+        items.push(adminMedia(store.adminFile(row.id)!))
+      }
+      // A title that lost all of its files to the new grouping is cleaned up.
+      pruneOrphans(store)
+      return { items, skipped }
     })
   }
 
   return {
-    cards: store.cards, browse: store.browse, home: store.home, detail: store.detail,
+    cards: store.browse, browse: store.browse, home: store.home, detail: store.detail,
     actors: () => ({ items: store.actors() }),
-    scanner, video, preview, poster, uploadPoster, uploadVideo, edit, publishMany,
-    settings: () => readSettings(store),
-    saveSettings: (input: { defaultDescription: string }) => store.transact(() => saveSettings(store, input)),
+    scanner, video, preview, poster, uploadPoster, uploadVideo, edit, classifyMany,
     forAdmin: (): AdminLibrary => ({
-      items: store.adminFiles().map(adminMedia), titles: store.titles(), scan: scanner.status(), settings: readSettings(store),
+      items: store.adminFiles().map(adminMedia),
+      titles: store.titles(),
+      scan: scanner.status(),
     }),
+    // Used by the scanner's caller to know whether a title carries its cast.
+    castOf: (titleId: string) => parseList(store.title(titleId)?.cast_members),
   }
 }
+
+export type Catalog = ReturnType<typeof createCatalog>

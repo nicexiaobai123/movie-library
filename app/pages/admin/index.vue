@@ -1,9 +1,9 @@
 <script setup lang="ts">
-import type { AdminLibrary, AdminMedia, BulkEditResult, ScanStatus } from '#shared/types/library'
-import AdminBulkPanel from '~/components/admin/AdminBulkPanel.vue'
+import type { AdminLibrary, AdminMedia, ScanStatus } from '#shared/types/library'
 import AdminMediaList from '~/components/admin/AdminMediaList.vue'
 import AdminScanPanel from '~/components/admin/AdminScanPanel.vue'
 import AdminUploadPanel from '~/components/admin/AdminUploadPanel.vue'
+import { captureFirstFrame, frameFileName } from '~/composables/useFirstFrame'
 import { adminErrorMessage, adminErrorStatus, useAdminApi } from '~/composables/useAdminApi'
 
 useSeoMeta({ title: '管理后台 · 夜灯', robots: 'noindex, nofollow' })
@@ -22,32 +22,20 @@ const signingOut = ref(false)
 const logoutError = ref('')
 const sessionExpired = ref(false)
 const sessionHeading = ref<HTMLElement | null>(null)
-const listPanel = ref<{ focusRow: (id: string) => void } | null>(null)
 
-// One section at a time keeps the page short; the list is the default because
-// it is where most editing happens.
-type AdminTab = 'files' | 'ingest' | 'bulk'
+// Two sections: the library as it stands, and the two ways to add to it.
+type AdminTab = 'files' | 'ingest'
 const tabs = [
-  { value: 'files', label: '文件清单' },
-  { value: 'ingest', label: '上传与扫描' },
-  { value: 'bulk', label: '批量处理' },
+  { value: 'files', label: '媒体库' },
+  { value: 'ingest', label: '扫描与上传' },
 ] as const satisfies readonly { value: AdminTab; label: string }[]
 const tab = ref<AdminTab>('files')
 
-const pendingCount = computed(() => (library.value?.items ?? []).filter(item => item.state === 'pending').length)
-// Published titles with no poster fall back to a placeholder tile on the site, so
-// the bulk tab advertises them as work waiting to be done.
-const missingPosterCount = computed(() => {
-  const titles = library.value?.titles ?? []
-  return titles.filter(title => {
-    const published = (library.value?.items ?? []).some(item => item.titleId === title.id && item.state === 'published')
-    return published && !title.posterPath
-  }).length
-})
+// Every file in the media folder becomes an entry, so the count is simply all of it.
+const fileCount = computed(() => library.value?.items.length ?? 0)
 const tabCounts = computed<Record<AdminTab, number | null>>(() => ({
-  files: pendingCount.value || null,
+  files: fileCount.value || null,
   ingest: null,
-  bulk: (pendingCount.value + missingPosterCount.value) || null,
 }))
 
 let scanTimer: ReturnType<typeof setTimeout> | null = null
@@ -108,13 +96,12 @@ async function refreshLibrary() {
     const result = await api.library()
     if (!canUpdate() || libraryRequest !== requestId) return
     library.value = result
-    // A catalog response that started before a scan request cannot replace its newer status.
     if (readingScanRevision === scanRevision && !startingScan.value && !checkingScan.value) {
       applyScanStatus(result.scan)
     }
   } catch (error) {
     if (!canUpdate() || handleUnauthorized(error) || libraryRequest !== requestId) return
-    libraryError.value = adminErrorMessage(error, '暂时无法读取文件清单，请重试。')
+    libraryError.value = adminErrorMessage(error, '暂时无法读取媒体库，请重试。')
   } finally {
     if (canUpdate() && libraryRequest === requestId) loadingLibrary.value = false
   }
@@ -128,7 +115,10 @@ async function checkScan(allowUnknown = false) {
     const result = await api.scanStatus()
     if (!canUpdate()) return
     applyScanStatus(result)
-    if (!result.running) void refreshLibrary()
+    if (!result.running) {
+      void refreshLibrary()
+      void fillMissingCovers()
+    }
   } catch (error) {
     if (!canUpdate() || handleUnauthorized(error)) return
     scanError.value = adminErrorMessage(error, '暂时无法查询扫描状态。')
@@ -161,34 +151,86 @@ async function startScan() {
   }
 }
 
-// Result messages are transient: they used to stay forever and push the list down.
+// Result messages are transient: they must not push the list down.
 let noticeTimer: ReturnType<typeof setTimeout> | undefined
 function announce(message: string) {
   notice.value = message
   if (noticeTimer !== undefined) clearTimeout(noticeTimer)
   noticeTimer = setTimeout(() => { notice.value = '' }, 6000)
 }
-onBeforeUnmount(() => { if (noticeTimer !== undefined) clearTimeout(noticeTimer) })
+onBeforeUnmount(() => {
+  disposed = true
+  clearScanTimer()
+  if (noticeTimer !== undefined) clearTimeout(noticeTimer)
+})
 
 function onSaved(item: AdminMedia) {
-  announce(item.state === 'published' && item.available
-    ? `已保存并发布：${item.fileName}`
-    : `已保存：${item.fileName}`)
+  announce(`已保存：${item.title}`)
   void refreshLibrary()
 }
 
-function onBulkPublished(result: BulkEditResult) {
-  announce(result.skipped.length
-    ? `批量发布完成：${result.published.length} 个已发布，${result.skipped.length} 个待手动整理。`
-    : `批量发布完成：${result.published.length} 个已发布。`)
+// Re-classifying a batch changes which titles exist, so the counts are re-read too.
+function onClassified() {
   void refreshLibrary()
 }
 
-// Hand a blocked file from the bulk panel to the detailed editor on the list tab.
-async function openManual(id: string) {
-  tab.value = 'files'
-  await nextTick()
-  listPanel.value?.focusRow(id)
+// The first frame becomes the cover automatically. The browser can decode the MP4,
+// so no FFmpeg is needed on the host; each title without a cover is filled in once
+// per page load, and a failure only leaves the placeholder.
+const covering = ref(0)
+let coverRun = 0
+
+async function fillMissingCovers() {
+  if (sessionExpired.value || disposed) return
+  const run = ++coverRun
+  let pending: { titleId: string; mediaId: string; title: string }[] = []
+  try {
+    const result = await $fetch<{ items: typeof pending }>('/api/admin/covers')
+    pending = result.items
+  } catch {
+    return
+  }
+  if (!pending.length) return
+  covering.value = pending.length
+  for (const entry of pending) {
+    if (disposed || sessionExpired.value || run !== coverRun) break
+    try {
+      const frame = await captureFirstFrame(`/api/admin/media/${encodeURIComponent(entry.mediaId)}/preview`)
+      const name = frameFileName(entry.title)
+      const uploaded = await $fetch<{ path: string }>('/api/admin/posters', {
+        method: 'POST',
+        query: { name },
+        body: new File([frame.blob], name, { type: 'image/jpeg' }),
+        headers: { 'content-type': 'image/jpeg' },
+        timeout: 60_000,
+      })
+      // Only the cover is written; every other field keeps its stored value.
+      const library = await api.library()
+      const title = library.titles.find(candidate => candidate.id === entry.titleId)
+      const row = library.items.find(item => item.titleId === entry.titleId)
+      if (!title || !row) continue
+      await api.editMedia(row.id, {
+        title: title.title,
+        year: title.year,
+        description: title.description,
+        posterPath: uploaded.path,
+        runtime: title.runtime,
+        cast: title.cast,
+        kind: title.kind,
+        season: row.season,
+        episode: row.episode,
+      })
+    } catch (error) {
+      if (adminErrorStatus(error) === 401) {
+        expireSession()
+        return
+      }
+      // A cover is a convenience; one failure must not stop the rest.
+    } finally {
+      if (!disposed) covering.value = Math.max(0, covering.value - 1)
+    }
+  }
+  if (!disposed && run === coverRun) void refreshLibrary()
 }
 
 async function logout() {
@@ -211,10 +253,9 @@ async function logout() {
   }
 }
 
-onMounted(() => { void refreshLibrary() })
-onBeforeUnmount(() => {
-  disposed = true
-  clearScanTimer()
+onMounted(async () => {
+  await refreshLibrary()
+  void fillMissingCovers()
 })
 </script>
 
@@ -223,7 +264,7 @@ onBeforeUnmount(() => {
     <header class="admin-heading">
       <div>
         <p class="eyebrow">夜灯 · 管理后台</p>
-        <h1>片库管理</h1>
+        <h1>媒体库</h1>
       </div>
       <button
         v-if="!sessionExpired"
@@ -239,7 +280,7 @@ onBeforeUnmount(() => {
 
     <section v-if="sessionExpired" class="admin-state" aria-labelledby="admin-session-title" data-test="admin-session-expired">
       <h2 id="admin-session-title" ref="sessionHeading" tabindex="-1">{{ signingOut ? '已退出登录' : '请重新登录' }}</h2>
-      <p>{{ signingOut ? '当前设备的管理会话已结束。' : '管理员会话已失效，登录后可继续管理影视库。' }}</p>
+      <p>{{ signingOut ? '当前设备的管理会话已结束。' : '管理员会话已失效，登录后可继续管理媒体库。' }}</p>
       <NuxtLink class="btn btn--primary" to="/admin/login">前往登录</NuxtLink>
     </section>
 
@@ -265,10 +306,12 @@ onBeforeUnmount(() => {
 
       <p v-if="logoutError" class="admin-error" role="alert">{{ logoutError }}</p>
       <p class="admin-notice" role="status" data-test="admin-save-status">{{ notice }}</p>
+      <p v-if="covering" class="admin-notice" role="status" data-test="admin-covering">
+        {{ `正在用视频第一帧生成封面，剩余 ${covering} 部…` }}
+      </p>
 
       <div v-show="tab === 'files'" id="admin-panel-files" role="tabpanel" aria-labelledby="admin-tab-files">
         <AdminMediaList
-          ref="listPanel"
           :items="library?.items ?? []"
           :titles="library?.titles ?? []"
           :loaded="library !== null"
@@ -277,6 +320,7 @@ onBeforeUnmount(() => {
           :disabled="signingOut"
           @refresh="refreshLibrary"
           @saved="onSaved"
+          @classified="onClassified"
           @unauthorized="expireSession"
         />
       </div>
@@ -295,61 +339,22 @@ onBeforeUnmount(() => {
           />
         </div>
       </div>
-
-      <div v-show="tab === 'bulk'" id="admin-panel-bulk" role="tabpanel" aria-labelledby="admin-tab-bulk">
-        <AdminBulkPanel
-          :items="library?.items ?? []"
-          :titles="library?.titles ?? []"
-          :settings="library?.settings ?? { defaultDescription: '' }"
-          :disabled="signingOut"
-          @published="onBulkPublished"
-          @manual="openManual"
-          @unauthorized="expireSession"
-        />
-      </div>
     </template>
   </div>
 </template>
 
 <style scoped>
 .admin-page {
-  padding-block: clamp(1.8rem, 4vw, 3.2rem) 0;
-}
-/* The admin page fills the space between the header and the footer as a column, so
-   the file list can stretch to the bottom instead of stopping at a fixed height. */
-:global(.site-main:has(> .admin-page)) {
-  display: flex;
-  flex-direction: column;
-  min-block-size: 0;
+  padding-block: clamp(1.8rem, 4vw, 3.2rem) clamp(1.6rem, 3vw, 2.4rem);
 }
 .admin-page {
   display: flex;
   flex-direction: column;
-  /* Row gap is the simplest way to keep breathing room between the page bands; the
-     panels themselves stay flush so their internal padding is not doubled. */
   gap: 0.9rem;
-  flex: 1 1 auto;
-  min-block-size: 0;
 }
-/* The tab strip belongs to the heading, so it sits closer to it than to the panel. */
 .admin-page > .admin-tabs { margin-block-end: 0.15rem; }
-.admin-page > #admin-panel-files {
-  display: flex;
-  flex-direction: column;
-  /* Grow into spare space but never shrink below the list's own height: a short
-     viewport scrolls the page instead of compressing the file list. */
-  flex: 1 0 auto;
-  min-block-size: 0;
-}
-/* Children that are not the list keep their natural height. */
-.admin-page > :not(#admin-panel-files):not(.admin-heading):not(.admin-tabs) { flex: none; }
 .admin-heading, .admin-tabs { flex: none; }
-/* A tool page fills the window, so the shared footer gap is closed here only. The
-   trigger keys off the file panel, which is a stable global marker, because this
-   page's own classes are scoped and would not match from here. */
 :global(.site:has(#admin-panel-files)) :global(.footer) { margin-block-start: 0; }
-/* The admin area is wider than the reading column so the file list has room for its
-   metadata, but still keeps the shell's side padding. */
 .admin-page > * { max-inline-size: 92rem; }
 .admin-heading {
   display: flex;
@@ -359,7 +364,6 @@ onBeforeUnmount(() => {
   gap: 0.9rem 2rem;
   padding-block-end: clamp(1.2rem, 2.6vw, 1.9rem);
 }
-/* The copy block shrinks instead of forcing the title under the logout button. */
 .admin-heading > div { min-inline-size: 0; }
 .admin-heading h1 { overflow-wrap: anywhere; }
 .admin-heading .eyebrow {
@@ -378,19 +382,10 @@ onBeforeUnmount(() => {
 .admin-tabs {
   display: flex;
   gap: 0 1.8rem;
-  /* Only the tab strip may scroll sideways. Setting overflow-x on its own makes
-     the vertical axis scrollable too, and the active tab's -1px margin would then
-     paint a stray vertical scrollbar beside the tabs. */
   overflow-x: auto;
   overflow-y: hidden;
-  scrollbar-width: thin;
-  scrollbar-color: var(--border-strong) transparent;
   border-block-end: 1px solid var(--border-strong);
 }
-.admin-tabs::-webkit-scrollbar { block-size: 2px; }
-.admin-tabs::-webkit-scrollbar:vertical { inline-size: 0; block-size: 0; }
-.admin-tabs::-webkit-scrollbar-thumb { border-radius: 2px; background: var(--border-strong); }
-.admin-tabs::-webkit-scrollbar-track { background: transparent; }
 .admin-tab {
   display: inline-flex;
   align-items: center;
@@ -434,8 +429,7 @@ onBeforeUnmount(() => {
   color: var(--color-danger, var(--accent-strong));
 }
 .admin-error, .admin-notice { overflow-wrap: anywhere; }
-/* A result message is a short-lived banner pinned to the bottom edge, so it never
-   pushes the file list down no matter how many rows are on screen. */
+/* A result message is a short-lived banner pinned to the bottom edge. */
 .admin-notice:not(:empty) {
   position: fixed;
   z-index: 40;
@@ -481,7 +475,6 @@ onBeforeUnmount(() => {
     border-inline-start: 1px solid var(--border);
   }
 }
-/* On a phone the logout button drops below the title rather than overlapping it. */
 @media (max-width: 30rem) {
   .admin-heading { align-items: flex-start; }
   .admin-heading h1 { font-size: clamp(1.7rem, 7vw, 2rem); }

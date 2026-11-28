@@ -4,5 +4,6 @@ import { parseCatalogQuery } from '../../http/validation.ts'
 
 export default endpoint((event, { catalog }) => {
   const { q, kind } = parseCatalogQuery(getQuery(event))
-  return { items: catalog.cards(q, kind) }
+  const result = catalog.browse({ q, kind, actor: null, sort: 'newest', page: 1, pageSize: 60 })
+  return { items: result.items }
 })

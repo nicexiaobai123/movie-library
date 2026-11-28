@@ -1,4 +1,4 @@
-import type { AdminLibrary, AdminMedia, AdminSettings, BulkEditItem, BulkEditResult, MediaEdit, ScanStatus } from '#shared/types/library'
+import type { AdminLibrary, AdminMedia, ClassifyInput, ClassifyResult, MediaEdit, ScanStatus } from '#shared/types/library'
 
 interface AdminSession {
   username: string
@@ -19,16 +19,14 @@ export function useAdminApi() {
       method: 'POST', retry: 0, timeout: 20_000,
     }),
     startScan: () => request<ScanStatus>('/api/admin/scan', {
-      method: 'POST', retry: 0, timeout: 20_000,
+      method: 'POST', retry: 0, timeout: 120_000,
     }),
     editMedia: (id: string, body: MediaEdit) => request<{ item: AdminMedia }>(`/api/admin/media/${encodeURIComponent(id)}`, {
       method: 'PATCH', body, retry: 0, timeout: 20_000,
     }),
-    publishMany: (items: BulkEditItem[]) => request<BulkEditResult>('/api/admin/media/bulk', {
-      method: 'POST', body: { items }, retry: 0, timeout: 120_000,
-    }),
-    saveSettings: (body: AdminSettings) => request<AdminSettings>('/api/admin/settings', {
-      method: 'PUT', body, retry: 0, timeout: 20_000,
+    // Batch re-classification of the selected files.
+    classify: (body: ClassifyInput) => request<ClassifyResult>('/api/admin/classify', {
+      method: 'POST', body, retry: 0, timeout: 60_000,
     }),
   }
 }

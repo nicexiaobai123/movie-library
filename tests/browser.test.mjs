@@ -20,7 +20,8 @@ async function signIn(page, fixture) {
   await page.locator(sel('admin-login-username')).fill(fixture.username)
   await page.locator(sel('admin-login-password')).fill(fixture.password)
   await Promise.all([page.waitForURL(`${fixture.base}/admin`), page.locator(sel('admin-login-submit')).click()])
-  await page.getByRole('heading', { name: '文件清单' }).waitFor()
+  // The library tab is the landing panel; its summary proves it rendered.
+  await page.locator(sel('admin-files-summary')).waitFor()
 }
 
 async function scanViaUi(page) {
@@ -138,9 +139,9 @@ test('Edge desktop and mobile viewports: library, editing, episode selection, pl
   await page.goto(`${fx.base}/admin`)
   await page.waitForURL(`${fx.base}/admin/login`)
   await signIn(page, fx)
-  // The admin page is split into tabs so only one section is visible at a time.
+  // Two sections now: the library itself and the two ways to add to it.
   await page.locator(sel('admin-tab-files')).waitFor()
-  assert.equal(await page.locator('[role="tab"]').count(), 3)
+  assert.equal(await page.locator('[role="tab"]').count(), 2)
   assert.equal(await page.locator(sel('admin-tab-files')).getAttribute('aria-selected'), 'true')
   assert.ok(await page.locator(sel('admin-library-empty')).isVisible())
   await page.locator(sel('admin-tab-ingest')).click()
@@ -156,83 +157,39 @@ test('Edge desktop and mobile viewports: library, editing, episode selection, pl
   await fx.stage('热河纪行 (2026).mp4')
   await fx.stage('电视剧/潮声来处/第二季/第02集.mp4')
   await fx.stage('电视剧/潮声来处/第二季/第01集.mp4')
-  await fx.stage(draftFile)
-  await scanViaUi(page)
   await scanViaUi(page)
   // Scanning happens on the ingest tab; the list lives on its own tab.
   await openAdminTab(page, 'files')
-  const pending = page.locator(sel('admin-media-row')).filter({ hasText: draftFile })
-  await pending.waitFor()
-  assert.match(await pending.locator(sel('admin-media-reason')).textContent(), /多个集号|集号范围/)
-  const library = (await (await fx.request('/api/library')).json()).items
-  const series = library.find(item => item.kind === 'series')
-  await pending.locator(sel('admin-media-edit')).click()
-  await page.locator(sel('admin-media-title-id')).selectOption(series.id)
-  await page.locator(sel('admin-media-season')).fill('2')
-  await page.locator(sel('admin-media-episode')).fill('3')
-  await page.locator(sel('admin-media-episode-title')).fill('回到港口')
-  await page.locator(sel('admin-media-description')).fill('沿着海边公路记录四季，找寻旧日录下的潮声。')
-  await page.locator(sel('admin-media-save')).click()
-  await pending.waitFor({ state: 'detached' })
-  await page.locator(sel('admin-filter-all')).click()
   const row = page.locator(`[data-media-id="${film.id}"]`)
+  await row.waitFor()
+
+  // Every file is a library entry: the row shows its recognised kind and title.
+  assert.match(await row.locator(sel('admin-media-title')).innerText(), /远山来信/)
+  const summary = (await page.locator(sel('admin-files-summary')).innerText()).trim()
+  assert.match(summary, /共 \d+ 个文件/)
+  assert.match(summary, /剧集 [1-9]/, 'the two episodes are recognised as a series')
+  await capture(page, 'desktop-admin')
+
+  // Editing the title and description keeps them, and the row reflects the change.
   await row.locator(sel('admin-media-edit')).click()
-  await page.locator(sel('admin-media-description')).fill('深秋，一封寄往山里的信让两个从未见面的人有了交集。')
+  const description = '深秋，一封寄往山里的信让两个从未见面的人有了交集。'
+  await page.locator(sel('admin-media-description')).fill(description)
+  await page.locator(sel('admin-media-cast')).fill('演员甲、演员乙')
   const posterQueued = page.waitForResponse(response => response.url().includes('/api/admin/posters?'))
   await page.locator(sel('admin-media-poster-file')).setInputFiles(poster)
   const coverResult = await posterQueued
   assert.equal(coverResult.status(), 201, coverResult.status() === 201 ? undefined : await coverResult.text().catch(() => 'no response body'))
-  await page.locator(sel('admin-poster-status')).filter({ hasText: '海报已上传' }).waitFor()
+  await page.locator(sel('admin-poster-status')).filter({ hasText: '封面已上传' }).waitFor()
   await page.locator(sel('admin-media-save')).click()
-  await page.locator(sel('admin-media-form')).waitFor({ state: 'detached' })
+  await page.locator(sel('admin-media-modal')).waitFor({ state: 'detached' })
+  await page.waitForTimeout(500)
+  const detail = await (await fx.request(`/api/library/${film.titleId}`)).json()
+  assert.equal(detail.description, description)
+  assert.deepEqual(detail.cast, ['演员甲', '演员乙'])
+  assert.ok(detail.posterUrl, 'the uploaded cover is attached')
   await noOverflow(page)
-  await capture(page, 'desktop-admin')
 
-  // Bulk actions: one description and a first-frame cover for every published film,
-  // and a pending file published from the name suggestion.
-  await openAdminTab(page, 'bulk')
-  await page.locator(sel('admin-bulk-mode-complete')).click()
-  await page.locator(sel('admin-bulk-description')).fill('这批影片使用同一段默认简介。')
-  await page.locator(sel('admin-bulk-first-frame')).check()
-  await page.locator(sel('admin-bulk-all')).check()
-  // Leave the long-titled film unselected so the "no poster" placeholder it covers
-  // further down still has a real title without artwork.
-  const longFilmId = (await page.evaluate(async () => (await fetch('/api/admin/library', { cache: 'no-store' })).json()))
-    .items.find(item => item.fileName === longFile)?.id
-  if (longFilmId) await page.locator(sel(`admin-bulk-select-${longFilmId}`)).uncheck()
-  const bulkRequest = page.waitForResponse(response => response.url().endsWith('/api/admin/media/bulk'))
-  await page.locator(sel('admin-bulk-publish')).click()
-  const bulkResult = await bulkRequest
-  assert.equal(bulkResult.status(), 200, bulkResult.status() === 200 ? undefined : await bulkResult.text().catch(() => 'no body'))
-  const bulkBody = await bulkResult.json()
-  assert.ok(bulkBody.published.length >= 1, JSON.stringify(bulkBody.skipped))
-  await page.locator(sel('admin-bulk-result')).waitFor()
-  const folder = bulkBody.published.find(item => item.fileName === filmFile) ?? bulkBody.published[0]
-  const folderDetail = await (await fx.request(`/api/library/${folder.titleId}`)).json()
-  assert.equal(folderDetail.description, '这批影片使用同一段默认简介。')
-  // The generated first frame is a real JPEG served back through the poster API.
-  assert.ok(folderDetail.posterUrl, 'bulk complete should attach a first-frame cover')
-  const posterResponse = await fx.request(folderDetail.posterUrl)
-  assert.equal(posterResponse.status, 200)
-  const posterBytes = Buffer.from(await posterResponse.arrayBuffer())
-  assert.deepEqual([...posterBytes.subarray(0, 3)], [0xff, 0xd8, 0xff])
-  assert.ok(posterBytes.length > 5_000, `unexpectedly small frame: ${posterBytes.length}`)
 
-  await page.locator(sel('admin-bulk-mode-publish')).click()
-  // The browser holds the admin session, so read the list through the page.
-  const adminState = await page.evaluate(async () => (await fetch('/api/admin/library', { cache: 'no-store' })).json())
-  const pendingIds = (adminState.items ?? []).filter(item => item.state === 'pending' && item.available)
-  if (pendingIds.length) {
-    await page.locator(sel('admin-bulk-all')).check()
-    const publishRequest = page.waitForResponse(response => response.url().endsWith('/api/admin/media/bulk'))
-    await page.locator(sel('admin-bulk-publish')).click()
-    assert.equal((await publishRequest).status(), 200)
-    await page.locator(sel('admin-bulk-result')).waitFor()
-  }
-  await noOverflow(page)
-  await capture(page, 'desktop-admin-bulk')
-
-  // Visitor accounts: register with a 6-character password, favourite a film,
   // Visitor accounts: register with a 6-character password, favourite a film,
   // then find it in the list and remove it again.
   const filmTitle = '远山来信'
@@ -384,8 +341,10 @@ test('Edge desktop and mobile viewports: library, editing, episode selection, pl
   // Films and series are top-level destinations, so the page has no kind switch.
   assert.equal(await phone.locator('.kind-tab').count(), 0)
   assert.equal(await phone.getByRole('heading', { level: 1 }).innerText(), '电影')
-  await phone.locator('.filter-toggle').tap()
-  await phone.locator('.filters.is-open').waitFor()
+  // The only filter is the actor; the panel appears when one is selected.
+  await phone.goto(`${fx.base}/browse?kind=movie&actor=${encodeURIComponent('演员甲')}`)
+  await phone.locator('.filter-group').first().waitFor()
+  assert.equal(await phone.locator('.filter-group legend').first().innerText(), '演员')
   await noOverflow(phone)
   await capture(phone, 'mobile-browse')
 
@@ -396,14 +355,16 @@ test('Edge desktop and mobile viewports: library, editing, episode selection, pl
   await capture(phone, 'mobile-detail')
 
   // Series detail keeps its episode list usable at phone width.
+  const seriesItem = (await (await fx.request('/api/library?kind=series')).json()).items[0]
+  const series = await (await fx.request(`/api/library/${seriesItem.id}`)).json()
   await phone.goto(`${fx.base}/movie/${series.id}`)
   // A single season needs no season heading, so wait for the episode grid itself.
   await phone.locator('.episode-grid').waitFor()
-  // Episodes without their own name fall back to the numbered label.
+  // Episodes are labelled by their number, because the files carry no episode name.
   const labels = await phone.locator('.tile-label').allTextContents()
-  assert.equal(labels.length, 3)
+  assert.equal(labels.length, 2)
   assert.match(labels[0], /第 1 集/)
-  assert.match(await phone.locator('.episode-tile').nth(2).textContent(), /回到港口/)
+  assert.match(labels[1], /第 2 集/)
   // Episodes are a compact grid of whole-tile links, not rows of buttons.
   assert.equal(await phone.locator('.episode-action').count(), 0)
   const gridColumns = await phone.locator('.episode-grid').evaluate(node => getComputedStyle(node).gridTemplateColumns.split(' ').length)
@@ -432,12 +393,11 @@ test('Edge desktop and mobile viewports: library, editing, episode selection, pl
   await phone.goto(`${fx.base}/admin`)
   await phone.waitForURL(`${fx.base}/admin/login`)
   await signIn(phone, fx)
-  await phone.locator(sel('admin-filter-all')).click()
-  await phone.locator(sel('admin-media-filename')).filter({ hasText: longFile }).waitFor()
+  await phone.locator(sel('admin-media-row')).filter({ hasText: longFile }).waitFor()
   await noOverflow(phone)
   const longRow = phone.locator(sel('admin-media-row')).filter({ hasText: longFile })
   await longRow.locator(sel('admin-media-edit')).tap()
-  await phone.locator(sel('admin-media-form')).waitFor()
+  await phone.locator(sel('admin-media-modal')).waitFor()
   await noOverflow(phone)
   await capture(phone, 'mobile-admin')
 

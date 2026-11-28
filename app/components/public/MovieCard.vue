@@ -9,44 +9,42 @@ withDefaults(defineProps<{
   wide?: boolean
   priority?: boolean
 }>(), { wide: false, priority: false })
-
-const rating = (value: number | null) => value === null ? null : value.toFixed(1)
 </script>
 
 <template>
   <NuxtLink :to="`/movie/${encodeURIComponent(item.id)}`" class="card">
     <span class="card-frame">
       <MovieArt
-        :src="wide ? (item.backdropUrl ?? item.posterUrl) : item.posterUrl"
+        :src="item.posterUrl"
         :title="item.title"
         :year="item.year"
         :kind="item.kind"
-        :ratio="wide ? 'wide' : 'poster'"
+        ratio="poster"
         :priority="priority"
       />
-      <span v-if="!item.available" class="card-badge">暂无片源</span>
       <span class="card-overlay" aria-hidden="true">
         <span class="card-overlay-top">
-          <span v-if="rating(item.rating)" class="card-score">{{ rating(item.rating) }}</span>
           <span v-if="item.year" class="card-year">{{ item.year }}</span>
+          <span v-if="item.kind === 'series'" class="card-year">剧集</span>
         </span>
         <span class="card-overlay-body">
           <span class="card-overlay-title">{{ item.title }}</span>
-          <span v-if="item.genres.length" class="card-genres">{{ item.genres.slice(0, 2).join(' · ') }}</span>
+          <span v-if="item.cast.length" class="card-genres">{{ item.cast.slice(0, 2).join(' · ') }}</span>
         </span>
         <span class="card-play">
           <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M8.5 5.5 18.5 12l-10 6.5z" fill="currentColor" /></svg>
-          <span>{{ item.available ? '播放' : '查看详情' }}</span>
+          <span>播放</span>
         </span>
       </span>
     </span>
     <span class="card-meta">
-      <!-- The artwork already sets the title, so repeat it only when there is none. -->
-      <span v-if="!item.posterUrl" class="card-title" :title="item.title">{{ item.title }}</span>
+      <!-- The title is always shown: a first-frame cover is just a picture of the
+           video, so it cannot stand in for the name the way a designed poster can. -->
+      <span class="card-title" :title="item.title">{{ item.title }}</span>
       <span class="card-sub">
-        <span v-if="rating(item.rating)" class="card-rating">★ {{ rating(item.rating) }}</span>
+        <span v-if="item.kind === 'series'" class="card-kind">剧集</span>
         <span v-if="item.year">{{ item.year }}</span>
-        <span v-if="item.kind === 'series'">剧集</span>
+        <span v-if="item.runtime">{{ item.runtime }} 分钟</span>
       </span>
     </span>
   </NuxtLink>
@@ -130,17 +128,28 @@ const rating = (value: number | null) => value === null ? null : value.toFixed(1
   font-size: 0.68rem;
 }
 .card-meta { display: grid; gap: 0.15rem; padding-block-start: 0.7rem; }
+/* Two lines, so a long title is readable instead of vanishing into an ellipsis. */
 .card-title {
+  display: -webkit-box;
   overflow: hidden;
-  white-space: nowrap;
-  text-overflow: ellipsis;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
   font-size: 0.88rem;
   font-weight: 600;
   line-height: 1.35;
+  overflow-wrap: anywhere;
   transition: color var(--dur-fast) var(--ease);
 }
 .card-sub { display: flex; flex-wrap: wrap; align-items: center; gap: 0.4rem; min-block-size: 1.15rem; color: var(--text-muted); font-size: 0.76rem; font-variant-numeric: tabular-nums; }
-.card-rating { color: var(--accent); }
+/* The kind tag leads the metadata line so a series is identifiable at a glance. */
+.card-kind {
+  padding: 0.02rem 0.35rem;
+  border-radius: var(--radius-pill);
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: 0.7rem;
+  font-weight: 600;
+}
 .card:focus-visible .card-frame { outline: 2px solid var(--accent-strong); outline-offset: 3px; }
 
 @media (hover: hover) and (pointer: fine) {

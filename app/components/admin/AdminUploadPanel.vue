@@ -63,7 +63,7 @@ async function send(file: File): Promise<void> {
     results.value = [...results.value, {
       name: file.name,
       ok: true,
-      message: item.state === 'pending' ? '已加入待整理' : '已入库',
+      message: '已入库',
     }]
     emit('uploaded', item)
   } catch (error) {

@@ -20,7 +20,7 @@ if (import.meta.server && notFound.value) {
 useSeoMeta({ title: () => detail.value ? `${detail.value.title} · 夜灯` : '影片详情 · 夜灯' })
 
 const { data: related } = await useFetch<{ items: TitleDetail[] }>('/api/library/browse', {
-  query: { kind: detail.value?.kind, pageSize: 12 },
+  query: { pageSize: 12 },
   default: () => ({ items: [] }),
   server: false,
 })
@@ -46,7 +46,7 @@ const runtimeLabel = computed(() => {
 })
 const seasonCount = computed(() => new Set(detail.value?.episodes.map(episode => episode.season)).size)
 const moreLikeThis = computed(() => (related.value?.items ?? []).filter(item => item.id !== titleId.value).slice(0, 10))
-const rating = computed(() => detail.value?.rating ? detail.value.rating.toFixed(1) : null)
+const available = computed(() => Boolean(playable.value?.available))
 </script>
 
 <template>
@@ -70,7 +70,7 @@ const rating = computed(() => detail.value?.rating ? detail.value.rating.toFixed
 
     <template v-else>
       <div class="backdrop">
-        <MovieArt :src="detail.backdropUrl ?? detail.posterUrl" :title="detail.title" ratio="wide" priority :show-caption="false" />
+        <MovieArt :src="detail.posterUrl" :title="detail.title" ratio="wide" priority :show-caption="false" />
         <div class="backdrop-scrim" aria-hidden="true" />
       </div>
 
@@ -84,39 +84,37 @@ const rating = computed(() => detail.value?.rating ? detail.value.rating.toFixed
         <div class="info-col">
           <p class="eyebrow">{{ detail.kind === 'series' ? '剧集' : '电影' }}</p>
           <h1 class="detail-title">{{ detail.title }}</h1>
-          <p v-if="detail.originalTitle" class="detail-original">{{ detail.originalTitle }}</p>
 
           <div class="detail-badges">
-            <span v-if="rating" class="badge badge--score">★ {{ rating }}</span>
             <span v-if="detail.year" class="badge">{{ detail.year }}</span>
             <span v-if="runtimeLabel" class="badge">{{ runtimeLabel }}</span>
-            <span v-if="detail.region" class="badge">{{ detail.region }}</span>
             <span v-if="detail.kind === 'series'" class="badge">{{ seasonCount }} 季 · {{ detail.episodes.length }} 集</span>
-            <span v-if="!detail.available" class="badge badge--muted">暂无片源</span>
-          </div>
-
-          <div v-if="detail.genres.length" class="detail-genres">
-            <NuxtLink v-for="genre in detail.genres" :key="genre" :to="{ path: '/browse', query: { genre } }" class="genre-chip">{{ genre }}</NuxtLink>
+            <span v-if="!available" class="badge badge--muted">暂无片源</span>
           </div>
 
           <p v-if="detail.description" class="detail-overview">{{ detail.description }}</p>
           <p v-else class="detail-overview detail-overview--empty">暂无简介。</p>
 
           <div class="detail-actions">
-            <NuxtLink v-if="detail.available && playable" :to="watchLink" class="btn btn--primary detail-btn">
+            <NuxtLink v-if="available && playable" :to="watchLink" class="btn btn--primary detail-btn">
               <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M8.5 5.5 18.5 12l-10 6.5z" fill="currentColor" /></svg>
               {{ detail.kind === 'series' ? '开始播放' : '播放正片' }}
             </NuxtLink>
             <span v-else class="detail-unavailable">源文件暂不可用</span>
             <FavoriteButton class="detail-favorite" />
-          </div>          <dl v-if="detail.director || detail.cast.length" class="detail-credits">
-            <div v-if="detail.director">
-              <dt>导演</dt>
-              <dd>{{ detail.director }}</dd>
-            </div>
-            <div v-if="detail.cast.length">
-              <dt>主演</dt>
-              <dd>{{ detail.cast.join(' / ') }}</dd>
+          </div>
+
+          <dl v-if="detail.cast.length" class="detail-credits">
+            <div>
+              <dt>演员</dt>
+              <dd>
+                <NuxtLink
+                  v-for="(name, index) in detail.cast"
+                  :key="name"
+                  :to="{ path: '/browse', query: { actor: name } }"
+                  class="detail-cast-link"
+                >{{ name }}{{ index < detail.cast.length - 1 ? ' / ' : '' }}</NuxtLink>
+              </dd>
             </div>
           </dl>
         </div>
@@ -180,6 +178,8 @@ const rating = computed(() => detail.value?.rating ? detail.value.rating.toFixed
 .genre-chip:hover { background: var(--accent-soft); color: var(--accent); }
 .detail-overview { max-inline-size: 60ch; margin: 0.2rem 0 0; color: var(--text-secondary); font-size: 0.95rem; line-height: 1.85; text-wrap: pretty; }
 .detail-overview--empty { color: var(--text-muted); }
+.detail-cast-link { color: var(--text-secondary); text-decoration: none; }
+.detail-cast-link:hover { color: var(--accent); }
 .detail-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 0.7rem; margin-block-start: 0.5rem; }
 /* The favourite section holds a button plus an optional hint. Only the button
    belongs on this row, so the section is flattened into the flex container and

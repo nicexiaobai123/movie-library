@@ -57,14 +57,12 @@ const multipleSeasons = computed(() => seasons.value.length > 1)
                 class="episode-tile"
                 :class="{ 'is-current': episode.id === activeEpisodeId }"
                 :aria-current="episode.id === activeEpisodeId ? 'true' : undefined"
-                :aria-label="`${episode.id === activeEpisodeId ? '正在播放：' : '播放'}${episodeLabel(episode)}${episode.title ? `，${episode.title}` : ''}`"
+                :aria-label="`${episode.id === activeEpisodeId ? '正在播放：' : '播放'}${episodeLabel(episode)}`"
                 @click="navigate"
               >
                 <span class="tile-number">{{ episode.episode }}</span>
                 <span class="tile-body">
-                  <!-- The number already says which episode it is; the name is the
-                       only thing worth repeating, so it takes the whole line. -->
-                  <span class="tile-label">{{ episode.title || `第 ${episode.episode} 集` }}</span>
+                  <span class="tile-label">第 {{ episode.episode }} 集</span>
                 </span>
                 <span class="tile-icon" aria-hidden="true">
                   <PublicIcon name="play" />

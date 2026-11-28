@@ -15,11 +15,8 @@ const metrics = computed(() => {
   if (!last.value) return []
   return [
     { label: '发现', count: last.value.discovered },
-    { label: '已入库', count: last.value.indexed },
-    { label: '已发布', count: last.value.published },
-    { label: '待整理', count: last.value.pending },
-    { label: '未稳定', count: last.value.unstable },
-    { label: '缺失', count: last.value.missing },
+    { label: '新入库', count: last.value.indexed },
+    { label: '已移除', count: last.value.removed },
   ]
 })
 
@@ -34,7 +31,7 @@ function formatDate(value: string) {
   <section class="scan-panel" aria-labelledby="admin-scan-title">
     <header class="scan-intro">
       <h2 id="admin-scan-title">扫描媒体目录</h2>
-      <p>检查磁盘中的视频，登记新文件并标记已移走的文件。</p>
+      <p>读取媒体目录里的 MP4，按文件名识别片名、电影或剧集，直接进入媒体库。</p>
     </header>
 
     <div class="scan-actions">
@@ -66,7 +63,7 @@ function formatDate(value: string) {
       data-test="admin-scan-status"
     >
       <template v-if="starting">正在提交扫描请求。</template>
-      <template v-else-if="scan?.running">扫描在后台进行，完成后会自动刷新文件清单。</template>
+      <template v-else-if="scan?.running">扫描进行中，完成后会自动刷新媒体库。</template>
       <template v-else-if="last?.state === 'failed'">最近一次扫描失败。</template>
       <template v-else-if="last">最近一次扫描已完成。</template>
       <template v-else-if="scan">尚未执行过扫描。</template>
@@ -84,7 +81,6 @@ function formatDate(value: string) {
         </div>
       </dl>
       <p v-if="last.message" class="result-message" :class="{ 'scan-error': last.state === 'failed' }">{{ last.message }}</p>
-      <p v-else-if="last.unstable" class="scan-time waiting-note">文件稳定后才会入库，可稍后再次扫描。</p>
     </div>
   </section>
 </template>

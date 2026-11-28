@@ -167,6 +167,8 @@ export async function checksum(stream) {
 export const checksumFile = path => checksum(createReadStream(path))
 
 export function mediaEdit(fields = {}) {
-  return { titleId: null, kind: 'movie', title: '已整理的影片', year: null, description: '', posterPath: null,
-    season: null, episode: null, episodeTitle: null, ...fields }
+  return {
+    title: '已整理的影片', year: null, description: '', posterPath: null, runtime: null, cast: [],
+    kind: 'movie', season: null, episode: null, ...fields,
+  }
 }

@@ -17,7 +17,7 @@ defineProps<{ items: ContinueWatchingItem[] }>()
       <li v-for="item in items" :key="`${item.id}-${item.episodeId ?? ''}`" class="resume-item">
         <NuxtLink :to="watchResumeUrl(item)" class="resume-card">
           <span class="resume-art">
-            <MovieArt :src="item.backdropUrl ?? item.posterUrl" :title="item.title" ratio="wide" :show-caption="false" />
+            <MovieArt :src="item.posterUrl" :title="item.title" ratio="wide" :show-caption="false" />
             <span class="resume-play" aria-hidden="true">
               <svg viewBox="0 0 24 24" focusable="false"><path d="M8.5 5.5 18.5 12l-10 6.5z" fill="currentColor" /></svg>
             </span>

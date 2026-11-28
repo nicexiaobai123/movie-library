@@ -23,7 +23,7 @@ export default defineNuxtConfig({
     library: {
       dbPath: '.data/library.sqlite',
       mediaRoot: 'media',
-      scanIntervalMs: 15_000,
+      scanIntervalMs: 0,
       stableMs: 8_000,
       maxUploadBytes: 32 * 1024 ** 3,
       allowedOrigins: '',

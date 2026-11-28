@@ -5,14 +5,14 @@ import type { LibraryConfig } from '../domain/config.ts'
 import { errorCode, LibraryError } from '../domain/errors.ts'
 import { readDuration, validMp4 } from '../storage/formats.ts'
 import { assertRootUnchanged, fileStamp, inspectMediaFile, inventory, isMissing, openMediaFile, resolveMediaRoot, sameStamp } from '../storage/paths.ts'
-import type { FoundFile, Stamp } from '../storage/paths.ts'
+import type { FoundFile } from '../storage/paths.ts'
 import { sweepStaging } from '../storage/uploads.ts'
-import { canAutoIndex, indexMedia, pendingClaims, recognizedSlot } from './index-media.ts'
+import { indexMedia, pruneOrphans } from './index-media.ts'
 
-interface Observation { stamp: Stamp; since: number }
-
+// A sweep reads the folder and makes the library match it. Nothing here waits for
+// the administrator: a file that is not yet a complete MP4 is stored as unavailable
+// and becomes available on the next sweep that can read it.
 export function createScanner(store: LibraryStore, config: LibraryConfig, uploadInProgress: ReadonlySet<string>) {
-  let seen = new Map<string, Observation>()
   let active: Promise<void> | null = null
 
   const status = (): ScanStatus => ({ running: active !== null, last: store.lastScan() })
@@ -22,124 +22,62 @@ export function createScanner(store: LibraryStore, config: LibraryConfig, upload
     const id = randomUUID()
     try {
       const root = await resolveMediaRoot(config.mediaRoot)
-      const snapshot = new Map(store.files().map(row => [row.path_key, row]))
-      const files = await inventory(root)
-      const now = performance.now()
-      const nextSeen = new Map<string, Observation>()
+      const found = await inventory(root)
       const stable = new Map<string, { entry: FoundFile; valid: boolean; duration: number | null }>()
-      const waiting = new Set<string>()
-      // Files whose title is missing a runtime, to be read without re-indexing.
-      const backfill = new Set<string>()
-      const durations = new Map<string, number>()
-      for (const [key, entry] of files) {
+
+      for (const [key, entry] of found) {
         if (uploadInProgress.has(key)) continue
-        const previous = seen.get(key)
-        const since = previous && sameStamp(previous.stamp, entry.stamp) ? previous.since : now
-        nextSeen.set(key, { since, stamp: entry.stamp })
-        const indexed = snapshot.get(key)
-        // An already-indexed, unchanged file normally needs no work. The exception
-        // is a title stored before durations were detected: read it once to fill in
-        // the runtime, without re-running the whole indexing flow.
-        const unchanged = indexed && indexed.relative_path === entry.relative && sameStamp(indexed, entry.stamp)
-        if (unchanged && (indexed.available || !indexed.valid_mp4)) {
-          if (indexed.valid_mp4 && indexed.title_id && store.title(indexed.title_id)?.runtime == null) {
-            backfill.add(key)
-          }
-          continue
-        }
-        if (now - since < config.stableMs) {
-          waiting.add(key)
-          continue
-        }
-        let verified: Awaited<ReturnType<typeof openMediaFile>> | undefined
+        let file: Awaited<ReturnType<typeof openMediaFile>> | undefined
         try {
-          verified = await openMediaFile(root, entry.relative)
-          const valid = sameStamp(verified.stamp, entry.stamp) && await validMp4(verified.file, verified.stamp.size)
-          // Duration is read here, while the file is still open for validation.
-          const duration = valid ? await readDuration(verified.file, verified.stamp.size) : null
-          const after = await inspectMediaFile(root, entry.relative)
-          if (!sameStamp(verified.stamp, entry.stamp) || !sameStamp(after, entry.stamp)
-            || !sameStamp(fileStamp(await verified.file.stat()), entry.stamp)) {
-            waiting.add(key)
-            nextSeen.set(key, { since: performance.now(), stamp: after })
-            continue
-          }
+          file = await openMediaFile(root, entry.relative)
+          const valid = sameStamp(file.stamp, entry.stamp) && await validMp4(file.file, file.stamp.size)
+          const duration = valid ? await readDuration(file.file, file.stamp.size) : null
           stable.set(key, { entry, valid, duration })
         } catch (error) {
+          // A file that vanished or cannot be read between listing and opening is
+          // simply not part of this snapshot; the next sweep will see it again.
           if (!isMissing(error) && !(error instanceof LibraryError && error.status === 404)) throw error
-          waiting.add(key)
-          nextSeen.delete(key)
         } finally {
-          await verified?.file.close()
+          await file?.file.close()
         }
       }
+
       await assertRootUnchanged(root, config.mediaRoot)
-      // Fill in runtimes for titles that were indexed before duration detection,
-      // by reading only the movie header of each unchanged file.
-      for (const key of backfill) {
-        const entry = files.get(key)
-        if (!entry) continue
-        const file = await openMediaFile(root, entry.relative).catch(() => null)
-        if (!file) continue
-        try {
-          if (sameStamp(file.stamp, entry.stamp)) {
-            const seconds = await readDuration(file.file, file.stamp.size)
-            if (seconds) durations.set(key, seconds)
-          }
-        } finally {
-          await file.file.close()
-        }
-      }
+
+      let indexed = 0
+      let removed = 0
       store.transact(() => {
-        const counts = { indexed: 0, published: 0, pending: 0, missing: 0 }
-        const conflicts = pendingClaims(store.files().filter(row => files.has(row.path_key)))
-        const fresh = new Set<string>()
+        const snapshot = new Map(store.files().map(row => [row.path_key, row]))
         for (const [key, value] of stable) {
-          const current = store.fileAt(key)
-          if (current?.file_version !== snapshot.get(key)?.file_version || uploadInProgress.has(key) || !canAutoIndex(current, value.valid)) continue
-          const claim = recognizedSlot(value.entry.relative)
-          if (!claim) continue
-          if (fresh.has(claim)) conflicts.add(claim)
-          fresh.add(claim)
+          if (uploadInProgress.has(key)) continue
+          const before = snapshot.get(key)
+          const unchanged = before && before.size === value.entry.stamp.size
+            && before.mtime === value.entry.stamp.mtime && before.available === (value.valid ? 1 : 0)
+          if (unchanged && before.title_id) continue
+          indexMedia(store, value.entry, value.valid, value.duration)
+          indexed++
         }
-        for (const [key, value] of stable) {
-          if (uploadInProgress.has(key) || store.fileAt(key)?.file_version !== snapshot.get(key)?.file_version) continue
-          const indexed = indexMedia(store, value.entry, value.valid, 'scan', conflicts, value.duration)
-          counts.indexed++
-          counts[indexed.state]++
-        }
-        for (const [key, before] of snapshot) {
+        // Anything indexed that the folder no longer contains is deleted with it.
+        for (const [key, row] of snapshot) {
           if (uploadInProgress.has(key) || stable.has(key)) continue
-          if (!files.has(key)) {
-            if (store.unavailable(before.id, before.file_version)) counts.missing++
-          } else if (waiting.has(key)) {
-            // An existing path is being overwritten or copied back. Preserve its
-            // metadata but do not stream the changed bytes while it settles.
-            store.unavailable(before.id, before.file_version)
-          }
+          store.deleteFile(row.id)
+          removed++
         }
-        for (const [key, seconds] of durations) {
-          const row = snapshot.get(key)
-          if (!row?.title_id) continue
-          store.fillRuntime(row.title_id, Math.max(1, Math.round(seconds / 60)))
-        }
+        pruneOrphans(store)
         const result: ScanResult = {
-          id, state: 'success', startedAt, finishedAt: new Date().toISOString(), discovered: files.size,
-          ...counts, unstable: waiting.size, message: null,
+          id, state: 'success', startedAt, finishedAt: new Date().toISOString(),
+          discovered: found.size, indexed, removed, message: null,
         }
         store.recordScan(result)
       })
-      seen = nextSeen
-      // The sweep is bounded to the dedicated directory and does not affect results.
       void sweepStaging(root)
     } catch (error) {
-      seen.clear()
       const message = error instanceof LibraryError && error.status === 503 ? error.message
-        : '扫描未完成，已保留原有入库和可用状态。请检查媒体目录和共享连接后重试。'
+        : '扫描未完成。请检查媒体目录和共享连接后重试。'
       console.warn('[library] Scan did not complete:', errorCode(error) ?? message)
       store.recordScan({
-        id, state: 'failed', startedAt, finishedAt: new Date().toISOString(), discovered: 0,
-        indexed: 0, published: 0, pending: 0, unstable: 0, missing: 0, message,
+        id, state: 'failed', startedAt, finishedAt: new Date().toISOString(),
+        discovered: 0, indexed: 0, removed: 0, message,
       })
     }
   }
@@ -155,3 +93,5 @@ export function createScanner(store: LibraryStore, config: LibraryConfig, upload
 
   return { status, start, async finish() { await active } }
 }
+
+export type Scanner = ReturnType<typeof createScanner>

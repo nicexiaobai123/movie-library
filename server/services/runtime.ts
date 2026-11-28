@@ -24,7 +24,6 @@ function createRuntime(input: LibraryConfigInput) {
     progress: createProgress(users, library),
   }
 }
-
 export type LibraryRuntime = ReturnType<typeof createRuntime>
 let runtime: LibraryRuntime | undefined
 

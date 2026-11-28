@@ -1,57 +1,41 @@
 export type LibraryKind = 'movie' | 'series'
 
-// The card is the only shape the public list endpoints return. It carries just
-// enough metadata to render a poster tile and a hover preview.
+// A card is everything the public lists need: enough for a poster tile.
 export interface LibraryCard {
   id: string
   kind: LibraryKind
   title: string
-  originalTitle: string | null
   year: number | null
   posterUrl: string | null
-  backdropUrl: string | null
-  rating: number | null
-  genres: string[]
-  available: boolean
+  runtime: number | null
+  cast: string[]
   addedAt: string
 }
 
 export interface PlayableMedia {
   id: string
-  available: boolean
   size: number
+  available: boolean
 }
 
 export interface LibraryEpisode {
   id: string
   season: number
   episode: number
-  title: string | null
   media: PlayableMedia | null
 }
 
 export interface TitleDetail extends LibraryCard {
   description: string
-  region: string | null
-  runtime: number | null
-  director: string | null
-  cast: string[]
   movie: PlayableMedia | null
   episodes: LibraryEpisode[]
 }
 
-export type BrowseSort = 'newest' | 'rating' | 'year' | 'title'
-
 export interface BrowseQuery {
   q: string
   kind: LibraryKind | null
-  genre: string | null
-  region: string | null
   actor: string | null
-  yearFrom: number | null
-  yearTo: number | null
-  minRating: number | null
-  sort: BrowseSort
+  sort: 'newest' | 'title'
   page: number
   pageSize: number
 }
@@ -61,12 +45,13 @@ export interface BrowseResult {
   total: number
   page: number
   pageSize: number
-  facets: {
-    genres: string[]
-    regions: string[]
-    years: number[]
-    actors: string[]
-  }
+  actors: string[]
+}
+
+export interface HomeData {
+  heroes: LibraryCard[]
+  rails: HomeRail[]
+  total: number
 }
 
 export interface HomeRail {
@@ -77,11 +62,21 @@ export interface HomeRail {
   items: LibraryCard[]
 }
 
-export interface HomeData {
-  heroes: LibraryCard[]
-  rails: HomeRail[]
-  total: number
-  genres: string[]
+// One row of the admin file list: the file plus what it was recognised as.
+export interface AdminMedia {
+  id: string
+  fileName: string
+  relativePath: string
+  available: boolean
+  size: number
+  addedAt: string
+  titleId: string | null
+  kind: LibraryKind
+  title: string
+  year: number | null
+  season: number | null
+  episode: number | null
+  cast: string[]
 }
 
 export interface AdminTitle {
@@ -92,41 +87,8 @@ export interface AdminTitle {
   description: string
   posterPath: string | null
   posterUrl: string | null
-  originalTitle: string | null
-  genres: string[]
-  region: string | null
-  rating: number | null
   runtime: number | null
-  director: string | null
   cast: string[]
-  backdropPath: string | null
-}
-
-export interface MediaSuggestion {
-  kind: LibraryKind | null
-  title: string | null
-  year: number | null
-  season: number | null
-  episode: number | null
-  // A star parsed out of a `star-title-tag` filename, shown as a hint only.
-  actor: string | null
-}
-
-export interface AdminMedia {
-  id: string
-  fileName: string
-  relativePath: string
-  state: 'published' | 'pending'
-  available: boolean
-  reason: string | null
-  size: number
-  source: 'scan' | 'upload'
-  addedAt: string
-  titleId: string | null
-  season: number | null
-  episode: number | null
-  episodeTitle: string | null
-  suggestion: MediaSuggestion
 }
 
 export interface ScanResult {
@@ -136,10 +98,7 @@ export interface ScanResult {
   finishedAt: string
   discovered: number
   indexed: number
-  published: number
-  pending: number
-  unstable: number
-  missing: number
+  removed: number
   message: string | null
 }
 
@@ -152,47 +111,37 @@ export interface AdminLibrary {
   items: AdminMedia[]
   titles: AdminTitle[]
   scan: ScanStatus
-  settings: AdminSettings
 }
 
-// Library-wide defaults the administrator can change without touching the database.
-export interface AdminSettings {
-  defaultDescription: string
-}
-
-// One row of a bulk publish. A null field means "use the filename suggestion",
-// except description, where null means "use the saved default description".
-export interface BulkEditItem {
-  id: string
-  // publish: turn a pending file into a library entry.
-  // complete: fill in missing description/poster on an already published title.
-  mode?: 'publish' | 'complete'
+// Re-classify a selection as films or as episodes of one series.
+export interface ClassifyInput {
+  ids: string[]
+  kind: LibraryKind
+  // For a series: an existing title to attach to, otherwise a new one is created
+  // from `title` (or the first file's recognised title).
   titleId: string | null
-  kind: LibraryKind | null
   title: string | null
+  season: number | null
+}
+
+export interface ClassifyResult {
+  items: AdminMedia[]
+  skipped: { id: string; message: string }[]
+}
+
+// Everything an administrator may change on a title.
+export interface MediaEdit {
+  title: string
   year: number | null
-  description: string | null
+  description: string
   posterPath: string | null
+  runtime: number | null
+  cast: string[]
+  kind: LibraryKind
   season: number | null
   episode: number | null
-  episodeTitle: string | null
-  replaceExisting: boolean
-  // complete only: replace a description/poster that the administrator already set.
-  overwrite?: boolean
 }
 
-export interface BulkEditSkipped {
-  id: string
-  fileName: string
-  message: string
-}
-
-export interface BulkEditResult {
-  published: AdminMedia[]
-  skipped: BulkEditSkipped[]
-}
-
-// A signed-in visitor of the public site. Separate from the single admin account.
 export interface UserSession {
   username: string | null
 }
@@ -205,7 +154,6 @@ export interface FavoriteList {
   items: LibraryCard[]
 }
 
-// One resumable position. `episodeId` is null for a whole film.
 export interface PlaybackProgress {
   titleId: string
   episodeId: string | null
@@ -213,7 +161,6 @@ export interface PlaybackProgress {
   duration: number
 }
 
-// One resumable position, keyed by the card's own id (titleId is implicit in `id`).
 export interface ContinueWatchingItem extends LibraryCard {
   episodeId: string | null
   episodeLabel: string | null
@@ -226,7 +173,13 @@ export interface ContinueWatching {
   items: ContinueWatchingItem[]
 }
 
-// One actor plus how many published titles they appear in.
+export interface ProgressInput {
+  titleId: string
+  episodeId: string | null
+  position: number
+  duration: number
+}
+
 export interface ActorSummary {
   name: string
   count: number
@@ -240,33 +193,4 @@ export interface ActorList {
 export interface ActorDetail {
   name: string
   titles: LibraryCard[]
-}
-
-export interface ProgressInput {
-  titleId: string
-  episodeId: string | null
-  position: number
-  duration: number
-}
-
-// Everything an administrator may change on a title, shared by PATCH and bulk.
-export interface MediaEdit {
-  titleId: string | null
-  kind: LibraryKind
-  title: string
-  originalTitle: string | null
-  year: number | null
-  description: string
-  genres: string[]
-  region: string | null
-  rating: number | null
-  runtime: number | null
-  director: string | null
-  cast: string[]
-  posterPath: string | null
-  backdropPath: string | null
-  season: number | null
-  episode: number | null
-  episodeTitle: string | null
-  replaceExisting?: boolean
 }
