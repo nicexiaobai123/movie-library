@@ -2,39 +2,20 @@
 import type { LibraryCard } from '#shared/types/library'
 import MovieCard from './MovieCard.vue'
 
-// Horizontally scrolling rail. Buttons scroll by a page so mouse users are not
-// forced to use shift+wheel; native swipe keeps working on touch devices.
+// A plain grid of cards, one screenful per section. The whole collection lives on
+// the catalogue page, which "more" links to, so there is nothing to scroll sideways.
 const props = withDefaults(defineProps<{
   title: string
   subtitle?: string | null
+  href: string
   items: LibraryCard[]
   wide?: boolean
   priority?: boolean
-}>(), { subtitle: null, wide: false, priority: false })
+  // How many cards this section shows before the "more" link takes over.
+  limit?: number
+}>(), { subtitle: null, wide: false, priority: false, limit: 7 })
 
-const track = ref<HTMLElement | null>(null)
-const atStart = ref(true)
-const atEnd = ref(false)
-
-function measure() {
-  const element = track.value
-  if (!element) return
-  atStart.value = element.scrollLeft <= 2
-  atEnd.value = element.scrollLeft + element.clientWidth >= element.scrollWidth - 2
-}
-
-function scrollByPage(direction: 1 | -1) {
-  const element = track.value
-  if (!element) return
-  element.scrollBy({ left: direction * element.clientWidth * 0.86, behavior: 'smooth' })
-}
-
-onMounted(() => {
-  measure()
-  window.addEventListener('resize', measure, { passive: true })
-})
-onBeforeUnmount(() => window.removeEventListener('resize', measure))
-watch(() => props.items, () => nextTick(measure))
+const shown = computed(() => props.items.slice(0, props.limit))
 </script>
 
 <template>
@@ -44,17 +25,13 @@ watch(() => props.items, () => nextTick(measure))
         <h2 class="section-title">{{ title }}</h2>
         <p v-if="subtitle" class="rail-sub">{{ subtitle }}</p>
       </div>
-      <div class="rail-nav">
-        <button type="button" class="rail-btn" :disabled="atStart" :aria-label="`向左滚动：${title}`" @click="scrollByPage(-1)">
-          <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="m14.5 6-6 6 6 6" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" /></svg>
-        </button>
-        <button type="button" class="rail-btn" :disabled="atEnd" :aria-label="`向右滚动：${title}`" @click="scrollByPage(1)">
-          <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="m9.5 6 6 6-6 6" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" /></svg>
-        </button>
-      </div>
+      <NuxtLink class="rail-more" :to="href" :aria-label="`查看全部${title}`" data-test="rail-more">
+        更多
+        <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="m9.5 6 6 6-6 6" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" /></svg>
+      </NuxtLink>
     </header>
-    <ul ref="track" class="rail-track" :class="{ 'rail-track--wide': wide }" role="list" @scroll.passive="measure">
-      <li v-for="(item, index) in items" :key="item.id" class="rail-item">
+    <ul class="rail-grid" :class="{ 'rail-grid--wide': wide }" role="list">
+      <li v-for="(item, index) in shown" :key="item.id" class="rail-item">
         <MovieCard :item="item" :wide="wide" :priority="priority && index < 4" />
       </li>
     </ul>
@@ -68,52 +45,55 @@ watch(() => props.items, () => nextTick(measure))
   align-items: flex-end;
   justify-content: space-between;
   gap: 1rem;
-  inline-size: min(100%, var(--shell-max));
-  margin-inline: auto;
+  margin-block-end: 0.9rem;
   padding-inline: var(--shell-pad);
-  padding-block-end: 0.85rem;
 }
+/* The heading text and the "more" link share the grid's content edges, so the link
+   lines up with the last card rather than the with padded shell edge. */
+.rail-head > * { inline-size: auto; }
 .rail-titles { display: grid; gap: 0.2rem; min-inline-size: 0; }
 .rail-sub { margin: 0; color: var(--text-muted); font-size: 0.8rem; }
-.rail-nav { display: flex; gap: 0.4rem; }
-.rail-btn {
-  display: inline-grid;
-  place-items: center;
-  inline-size: 34px;
-  block-size: 34px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-pill);
-  background: rgb(255 255 255 / 0.05);
-  color: var(--text-secondary);
-  transition: background-color var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease), opacity var(--dur-fast) var(--ease);
+.rail-more {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 0.15rem;
+  min-block-size: 34px;
+  padding-inline: 0.55rem;
+  border-radius: var(--radius-sm);
+  color: var(--text-muted);
+  font-size: 0.82rem;
+  transition: color var(--dur-fast) var(--ease), background var(--dur-fast) var(--ease);
 }
-.rail-btn svg { inline-size: 1.05rem; block-size: 1.05rem; }
-.rail-btn:not(:disabled):hover { background: rgb(255 255 255 / 0.14); color: var(--text); }
-.rail-btn:disabled { opacity: 0.3; }
+.rail-more svg { inline-size: 0.95rem; block-size: 0.95rem; }
+.rail-more:hover { background: var(--bg-hover); color: var(--text); }
+.rail-more:focus-visible { outline: 2px solid var(--accent-strong); outline-offset: 2px; }
 
-.rail-track {
+/* A flat grid: the same cards as the catalogue, in one row of seven that reflows
+   to fewer columns as the viewport narrows. A short section keeps its column widths
+   and stays left-aligned, so its cards are the same size as a full row's. */
+.rail-grid {
   display: grid;
-  grid-auto-flow: column;
-  grid-auto-columns: clamp(8.2rem, 12.4vw, 11.5rem);
-  gap: clamp(0.6rem, 1.1vw, 1rem);
+  grid-template-columns: repeat(var(--rail-columns, 7), minmax(0, 1fr));
+  grid-auto-rows: auto;
+  gap: clamp(0.8rem, 1.4vw, 1.2rem);
   margin: 0;
-  padding: 0.6rem var(--shell-pad) 1.4rem;
+  padding-inline: var(--shell-pad);
   list-style: none;
-  overflow-x: auto;
-  overflow-y: hidden;
-  scroll-snap-type: x proximity;
-  scrollbar-width: none;
-  overscroll-behavior-inline: contain;
-  /* The clip keeps the hover lift from bleeding past the row edges. */
-  scroll-padding-inline: var(--shell-pad);
 }
-.rail-track::-webkit-scrollbar { display: none; }
-.rail-track--wide { grid-auto-columns: clamp(15rem, 24vw, 22rem); }
-.rail-item { min-inline-size: 0; scroll-snap-align: start; }
+.rail-grid--wide { --rail-columns: 4; }
+.rail-item { min-inline-size: 0; }
 
+@media (max-width: 68rem) {
+  .rail-grid { grid-template-columns: repeat(5, minmax(0, 1fr)); }
+  .rail-grid--wide { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+}
 @media (max-width: 48rem) {
-  .rail-nav { display: none; }
-  .rail-track { grid-auto-columns: 8.4rem; }
-  .rail-track--wide { grid-auto-columns: 15rem; }
+  .rail-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+  .rail-grid--wide { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (max-width: 34rem) {
+  .rail-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .rail-grid--wide { grid-template-columns: repeat(1, minmax(0, 1fr)); }
 }
 </style>

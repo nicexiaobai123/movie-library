@@ -30,13 +30,13 @@ test('the next episode is reachable from the player and plays itself', { timeout
     await page.locator('video').waitFor()
     await page.waitForFunction(() => document.querySelector('video')?.readyState >= 1, null, { timeout: 20_000 })
 
-    // The buttons live in the action bar under the picture, not over it.
-    const actions = await page.locator('.watch-actions').boundingBox()
+    // The buttons float over the picture's bottom-left corner, above the control bar.
+    const stageBox = await page.locator('.watch-stage').boundingBox()
     const nextBox = await page.locator('[data-test="episode-next"]').boundingBox()
     report.push(`next button: ${JSON.stringify(nextBox && { x: Math.round(nextBox.x), y: Math.round(nextBox.y) })}`)
     assert.ok(nextBox, 'the next-episode button is present')
-    assert.ok(nextBox.y >= actions.y - 2 && nextBox.y + nextBox.height <= actions.y + actions.height + 2,
-      'the button sits inside the action bar')
+    assert.ok(nextBox.x - stageBox.x < 140, 'the button hugs the left edge of the picture')
+    assert.ok(stageBox.y + stageBox.height - (nextBox.y + nextBox.height) < 140, 'the button floats near the bottom')
     // Its name is a tooltip rather than visible text.
     assert.match(await page.locator('[data-test="episode-next"]').getAttribute('title') ?? '', /下一集/)
     await page.screenshot({ path: '.test-artifacts/episode-nav.png' })

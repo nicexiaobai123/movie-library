@@ -29,19 +29,21 @@ test('desktop: action-bar episode buttons, centred pause mark, 5s arrow keys', {
     await page.locator('video').waitFor()
     await page.waitForFunction(() => document.querySelector('video')?.readyState >= 1, null, { timeout: 20_000 })
 
-    // 1. Both step buttons live inside the action bar, beside 全屏 and 下载原文件.
+    // 1. Both step buttons float over the picture's bottom-left corner, above the
+    //    native control bar, rather than sitting in the action row.
     const prevBox = await page.locator('[data-test="episode-prev"]').boundingBox()
     const nextBox = await page.locator('[data-test="episode-next"]').boundingBox()
-    const actionsBox = await page.locator('.watch-actions').boundingBox()
+    const stageBox = await page.locator('.watch-stage').boundingBox()
     report.push(`prev=${JSON.stringify(prevBox && { x: Math.round(prevBox.x), y: Math.round(prevBox.y) })} next=${JSON.stringify(nextBox && { x: Math.round(nextBox.x), y: Math.round(nextBox.y) })}`)
     assert.ok(prevBox && nextBox, 'both step buttons exist on a middle episode')
     for (const [label, box] of [['previous', prevBox], ['next', nextBox]]) {
-      assert.ok(box.y >= actionsBox.y - 2 && box.y + box.height <= actionsBox.y + actionsBox.height + 2,
-        `the ${label} button sits inside the action bar row`)
-      assert.ok(box.x >= actionsBox.x - 2, `the ${label} button is within the action bar horizontally`)
+      assert.ok(box.x - stageBox.x < 140, `the ${label} button hugs the left edge`)
+      assert.ok(stageBox.y + stageBox.height - (box.y + box.height) < 140, `the ${label} button floats near the bottom`)
+      assert.ok(box.y > stageBox.y, `the ${label} button sits over the picture`)
     }
-    // No floating overlay is left over the picture.
-    assert.equal(await page.locator('.watch-episode-nav').count(), 0, 'the floating overlay is gone')
+    // It is an overlay, not a row in the action bar.
+    assert.equal(await page.locator('.watch-actions [data-test="episode-next"]').count(), 0, 'it is not in the action bar')
+    assert.equal(await page.locator('.watch-step-overlay').count(), 1, 'it is rendered as an overlay')
 
     // The label is a tooltip, not visible text on the control.
     const title = await page.locator('[data-test="episode-next"]').getAttribute('title')

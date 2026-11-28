@@ -54,6 +54,7 @@ const resumable = computed(() => signedIn.value ? resumeItems.value : [])
         :key="rail.id"
         :title="rail.title"
         :subtitle="rail.subtitle"
+        :href="rail.href"
         :items="rail.items"
         :wide="rail.presentation === 'wide'"
         :priority="index === 0"
@@ -73,7 +74,10 @@ const resumable = computed(() => signedIn.value ? resumeItems.value : [])
 }
 .skeleton--title { inline-size: clamp(8rem, 18vw, 14rem); block-size: 1.2rem; margin-block-end: 1rem; }
 .skeleton--card { aspect-ratio: 2 / 3; }
-.skeleton-row { display: grid; grid-auto-flow: column; grid-auto-columns: clamp(8.2rem, 12.4vw, 11.5rem); gap: 1rem; overflow: hidden; }
+.skeleton-row { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: clamp(0.8rem, 1.4vw, 1.2rem); }
+@media (max-width: 68rem) { .skeleton-row { grid-template-columns: repeat(5, minmax(0, 1fr)); } }
+@media (max-width: 48rem) { .skeleton-row { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
+@media (max-width: 34rem) { .skeleton-row { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 .rails-loading { display: grid; gap: 2rem; padding-inline: var(--shell-pad); }
 .rail-skeleton { display: grid; gap: 0.8rem; }
 .load-error { display: grid; justify-items: start; gap: 1rem; padding-block: 3rem; color: var(--text-secondary); }

@@ -162,16 +162,23 @@ export function libraryStore(db: DatabaseSync) {
     const items = allCards()
     const rails: HomeRail[] = []
     const railKeys: string[] = []
-    const addRail = (id: string, railTitle: string, subtitle: string | null, list: LibraryCard[], presentation: HomeRail['presentation'] = 'poster') => {
+    const addRail = (
+      id: string,
+      railTitle: string,
+      subtitle: string | null,
+      list: LibraryCard[],
+      href: string,
+      presentation: HomeRail['presentation'] = 'poster',
+    ) => {
       const unique = [...new Map(list.map(item => [item.id, item])).values()]
       const key = unique.map(item => item.id).join(',')
       if (!key || railKeys.includes(key)) return
       railKeys.push(key)
-      rails.push({ id, title: railTitle, subtitle, presentation, items: unique })
+      rails.push({ id, title: railTitle, subtitle, presentation, href, items: unique })
     }
-    addRail('new', '最新入库', null, items)
-    addRail('series', '剧集', '按季、按集连续观看', items.filter(item => item.kind === 'series'))
-    addRail('all', '全部馆藏', null, items, 'wide')
+    addRail('new', '最新入库', null, items, '/browse')
+    addRail('series', '剧集', '按季、按集连续观看', items.filter(item => item.kind === 'series'), '/browse?kind=series')
+    addRail('all', '全部馆藏', null, items, '/browse', 'wide')
     return {
       heroes: items.slice(0, 5),
       rails,

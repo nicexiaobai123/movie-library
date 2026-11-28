@@ -59,6 +59,8 @@ export interface HomeRail {
   title: string
   subtitle: string | null
   presentation: 'poster' | 'wide'
+  // Where "more" leads: the catalogue view that shows the whole collection.
+  href: string
   items: LibraryCard[]
 }
 

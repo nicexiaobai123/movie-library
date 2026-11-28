@@ -1,4 +1,4 @@
-﻿<script setup lang="ts">
+<script setup lang="ts">
 import type { LibraryCard, TitleDetail } from '#shared/types/library'
 import EpisodeList from '~/components/public/EpisodeList.vue'
 import MovieCard from '~/components/public/MovieCard.vue'
@@ -719,6 +719,39 @@ watch(videoKey, () => {
             <span class="watch-transport-clock">{{ clockTime(duration) }}</span>
           </div>
 
+          <!-- Episode stepping floats over the picture, above the native control bar.
+               A <video> cannot host custom buttons inside its own chrome, so an overlay
+               anchored to the stage is how this is done. Icon only: the tooltip names
+               the episode, and it is faint until hovered so it stays out of the way. -->
+          <div
+            v-if="!touchUi && (nextEpisode || previousEpisode)"
+            class="watch-step-overlay"
+            data-test="episode-nav"
+          >
+            <button
+              v-if="previousEpisode"
+              type="button"
+              class="watch-step-button"
+              :title="`上一集：第 ${previousEpisode.season} 季第 ${previousEpisode.episode} 集`"
+              :aria-label="`上一集：第 ${previousEpisode.season} 季第 ${previousEpisode.episode} 集`"
+              data-test="episode-prev"
+              @click="watchEpisode(previousEpisode)"
+            >
+              <PublicIcon name="next" class="watch-step-back" />
+            </button>
+            <button
+              v-if="nextEpisode"
+              type="button"
+              class="watch-step-button"
+              :title="`下一集：第 ${nextEpisode.season} 季第 ${nextEpisode.episode} 集`"
+              :aria-label="`下一集：第 ${nextEpisode.season} 季第 ${nextEpisode.episode} 集`"
+              data-test="episode-next"
+              @click="watchEpisode(nextEpisode)"
+            >
+              <PublicIcon name="next" />
+            </button>
+          </div>
+
           <!-- While a swipe is being read, the pending position shows in the bottom-left
                corner so the viewer can see where the seek will land. -->
           <div v-if="swipePreviewing" class="watch-scrub-preview" aria-hidden="true" data-test="scrub-preview">
@@ -803,30 +836,6 @@ watch(videoKey, () => {
           </div>
           <div class="watch-actions">
             <button v-if="playbackError" type="button" class="btn watch-action" @click="reloadVideo">重新载入</button>
-            <!-- Episode stepping belongs with the other controls rather than floating
-                 over the picture. Icon only: the tooltip names the episode. -->
-            <button
-              v-if="previousEpisode"
-              type="button"
-              class="btn watch-action watch-step"
-              :title="`上一集：第 ${previousEpisode.season} 季第 ${previousEpisode.episode} 集`"
-              :aria-label="`上一集：第 ${previousEpisode.season} 季第 ${previousEpisode.episode} 集`"
-              data-test="episode-prev"
-              @click="watchEpisode(previousEpisode)"
-            >
-              <PublicIcon name="next" class="watch-step-back" />
-            </button>
-            <button
-              v-if="nextEpisode"
-              type="button"
-              class="btn watch-action watch-step"
-              :title="`下一集：第 ${nextEpisode.season} 季第 ${nextEpisode.episode} 集`"
-              :aria-label="`下一集：第 ${nextEpisode.season} 季第 ${nextEpisode.episode} 集`"
-              data-test="episode-next"
-              @click="watchEpisode(nextEpisode)"
-            >
-              <PublicIcon name="next" />
-            </button>
             <label class="watch-speed">
               <span class="visually-hidden">播放速度</span>
               <select
@@ -1096,9 +1105,38 @@ watch(videoKey, () => {
 
 /* Episode stepping sits in the action bar with the other controls; the icon carries
    the meaning and the title tooltip names the exact episode. */
-.watch-step { min-block-size: 42px; inline-size: 42px; padding-inline: 0; }
-.watch-step :deep(svg) { inline-size: 1.05rem; block-size: 1.05rem; }
+/* Episode stepping floats just above the native control bar. It stays faint so it
+   does not sit on the picture, and becomes solid on hover or keyboard focus. */
+.watch-step-overlay {
+  position: absolute;
+  z-index: 4;
+  inset-block-end: 3.4rem;
+  inset-inline-start: 0.9rem;
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+.watch-step-button {
+  display: grid;
+  place-items: center;
+  inline-size: 2.4rem;
+  block-size: 2.4rem;
+  border: 0;
+  border-radius: 50%;
+  background: rgb(0 0 0 / 0.62);
+  color: rgb(255 255 255 / 0.92);
+  opacity: 0.82;
+  cursor: pointer;
+  transition: opacity var(--dur-fast) var(--ease), background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
+}
+.watch-step-button:hover,
+.watch-step-button:focus-visible { opacity: 1; background: rgb(0 0 0 / 0.85); color: #fff; }
+.watch-step-button:focus-visible { outline: 2px solid var(--accent-strong); outline-offset: 2px; }
+.watch-step-button :deep(svg) { inline-size: 1.05rem; block-size: 1.05rem; }
 .watch-step-back { transform: rotate(180deg); }
+/* The overlay would sit on top of the transport on a phone, which has its own
+   next-episode button, so it is desktop only. */
+.watch-stage.is-touch .watch-step-overlay { display: none; }
 
 /* The title card sits in the top-left corner of the picture for a few seconds after
    the video loads, then fades so nothing remains over the film. */
