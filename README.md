@@ -149,6 +149,7 @@ pnpm test:actors     # 演员-片名 命名：片名干净、演员可点、筛�
 pnpm test:pager      # 片库分页
 pnpm test:classify   # 批量把选中的文件归为电影或剧集
 pnpm test:player     # 触屏用自建控制条、桌面快进提示在右下角
+pnpm test:touch      # 触屏：点不暂停、双击两侧快进、滑动预览、暂停标记
 pnpm test:next       # 左下角下一集、播完自动续播与取消
 pnpm test:title      # 进入播放页时左上角片名浮层（剧集含集号）自动淡出
 pnpm test:cards      # 卡片始终显示片名与「剧集」标签

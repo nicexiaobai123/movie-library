@@ -336,12 +336,13 @@ function onScrubEnd(event: PointerEvent) {
   ;(event.currentTarget as HTMLElement).releasePointerCapture?.(event.pointerId)
 }
 
-// Touch seeking has to work without the native bar. Two gestures cover it, the way
-// mobile players do it: tapping the left or right third of the picture steps back or
-// forward, and swiping sideways scrubs continuously.
+// Touch seeking works without the native bar. A sideways swipe scrubs, but it only
+// previews while the finger moves and applies the seek once it lifts: writing
+// `currentTime` on every move makes the decoder thrash and the picture stutter.
 const TAP_ZONE = 0.3
 const SWIPE_STEP = 10
-// The zone hint appears once per visit so the tap targets are discoverable.
+const DOUBLE_TAP_MS = 280
+// The zone hint appears once per visit so the gesture is discoverable.
 const seekHintShown = ref(false)
 let hintTimer: ReturnType<typeof setTimeout> | undefined
 
@@ -365,11 +366,33 @@ function showTitleCard() {
     titleCardShown.value = false
   }, 4000)
 }
+
 const swipe = { active: false, startX: 0, startY: 0, base: 0, moved: false, pointerId: -1 }
-let swipeTimer: ReturnType<typeof setTimeout> | undefined
+// While a swipe is in progress the overlay shows where the finger would land, so the
+// pending position is tracked separately from the element's real currentTime.
+const swipeOffset = ref(0)
+const swipePreviewing = ref(false)
+const swipePreview = computed(() => {
+  const end = duration.value
+  return Math.min(Math.max(swipe.base + swipeOffset.value, 0), Math.max(end - 0.05, 0))
+})
+
+// Double-tap bookkeeping: a single tap must not seek, so the second tap is what
+// commits the gesture.
+let lastTapAt = 0
+let lastTapZone: 'left' | 'right' | 'middle' | null = null
 
 function stageRect(): DOMRect | null {
   return stage.value?.getBoundingClientRect() ?? null
+}
+
+function zoneOf(clientX: number): 'left' | 'right' | 'middle' | null {
+  const rect = stageRect()
+  if (!rect?.width) return null
+  const ratio = (clientX - rect.left) / rect.width
+  if (ratio <= TAP_ZONE) return 'left'
+  if (ratio >= 1 - TAP_ZONE) return 'right'
+  return 'middle'
 }
 
 function onStagePointerDown(event: PointerEvent) {
@@ -382,6 +405,7 @@ function onStagePointerDown(event: PointerEvent) {
   swipe.startY = event.clientY
   swipe.base = player.value?.currentTime ?? 0
   swipe.moved = false
+  swipeOffset.value = 0
 }
 
 function onStagePointerMove(event: PointerEvent) {
@@ -396,18 +420,17 @@ function onStagePointerMove(event: PointerEvent) {
     }
     if (Math.abs(dx) < 12) return
     swipe.moved = true
+    swipePreviewing.value = true
+    revealControls()
     // Capture only once this is clearly a horizontal scrub.
     ;(event.currentTarget as HTMLElement).setPointerCapture?.(event.pointerId)
   }
   // A full swipe across the picture covers a fixed span, which keeps the gesture
-  // predictable regardless of the film's length.
+  // predictable regardless of the film's length. Nothing is committed yet: the
+  // overlay shows the landing point and the video keeps playing smoothly.
   const rect = stageRect()
   if (!rect?.width) return
-  const span = event.clientX - swipe.startX
-  const delta = (span / rect.width) * SWIPE_STEP * 4
-  seekTo(swipe.base + delta)
-  if (swipeTimer !== undefined) clearTimeout(swipeTimer)
-  swipeTimer = setTimeout(() => { swipeTimer = undefined }, 120)
+  swipeOffset.value = ((event.clientX - swipe.startX) / rect.width) * SWIPE_STEP * 4
 }
 
 function onStagePointerUp(event: PointerEvent) {
@@ -417,21 +440,30 @@ function onStagePointerUp(event: PointerEvent) {
   const element = player.value
   if (!element) return
   if (swipe.moved) {
-    // The scrub already moved playback; the bar's clock shows where it landed.
+    // The finger has lifted, so this is where the seek finally lands.
+    seekTo(element.currentTime + swipeOffset.value)
+    swipePreviewing.value = false
+    swipeOffset.value = 0
     revealControls()
     return
   }
-  // A tap: the outer thirds step, the middle toggles playback.
-  const rect = stageRect()
-  if (!rect?.width) return
-  const ratio = (event.clientX - rect.left) / rect.width
-  if (ratio <= TAP_ZONE) {
-    if (seekBy(-SWIPE_STEP)) revealControls()
-  } else if (ratio >= 1 - TAP_ZONE) {
-    if (seekBy(SWIPE_STEP)) revealControls()
-  } else {
-    togglePlay()
+  // A tap: the picture no longer toggles playback, so the only thing a single tap
+  // does is bring the controls back. Seeking needs a double tap on a side zone.
+  const zone = zoneOf(event.clientX)
+  const now = Date.now()
+  const repeated = zone !== null && zone === lastTapZone && now - lastTapAt < DOUBLE_TAP_MS
+  lastTapAt = now
+  lastTapZone = zone
+  if (!repeated) {
+    revealControls()
+    return
   }
+  // Consume the pair so a third tap starts a fresh count.
+  lastTapAt = 0
+  lastTapZone = null
+  if (zone === 'left') seekBy(-SWIPE_STEP)
+  else if (zone === 'right') seekBy(SWIPE_STEP)
+  revealControls()
 }
 
 function clockTime(seconds: number) {
@@ -543,7 +575,6 @@ onBeforeUnmount(() => {
   if (hideTimer !== undefined) clearTimeout(hideTimer)
   if (hintTimer !== undefined) clearTimeout(hintTimer)
   if (titleCardTimer !== undefined) clearTimeout(titleCardTimer)
-  if (swipeTimer !== undefined) clearTimeout(swipeTimer)
   stopEndedCountdown()
 })
 
@@ -651,6 +682,18 @@ watch(videoKey, () => {
             >
               <PublicIcon :name="playing ? 'pause' : 'play'" />
             </button>
+            <!-- The next episode sits with the transport on the left, not pushed to
+                 the far right of the bar. -->
+            <button
+              v-if="nextEpisode"
+              class="watch-transport-button watch-transport-next"
+              type="button"
+              :aria-label="`下一集：第 ${nextEpisode.season} 季第 ${nextEpisode.episode} 集`"
+              data-test="touch-next"
+              @click="watchEpisode(nextEpisode)"
+            >
+              <PublicIcon name="next" />
+            </button>
             <span class="watch-transport-clock" data-test="touch-clock">{{ clockTime(progress) }}</span>
             <div
               class="watch-transport-track"
@@ -672,17 +715,6 @@ watch(videoKey, () => {
               <span class="watch-transport-fill" :style="{ inlineSize: `${duration ? (progress / duration) * 100 : 0}%` }" />
             </div>
             <span class="watch-transport-clock">{{ clockTime(duration) }}</span>
-            <!-- The next episode is one tap away on a phone too. -->
-            <button
-              v-if="nextEpisode"
-              class="watch-transport-button watch-transport-next"
-              type="button"
-              :aria-label="`下一集：第 ${nextEpisode.season} 季第 ${nextEpisode.episode} 集`"
-              data-test="touch-next"
-              @click="watchEpisode(nextEpisode)"
-            >
-              <PublicIcon name="next" />
-            </button>
           </div>
 
           <!-- Episode stepping sits in the bottom-left corner of the picture, where
@@ -708,7 +740,21 @@ watch(videoKey, () => {
             >
               <PublicIcon name="next" />
             </button>
-            <span class="watch-episode-nav-label">下一集</span>
+            <span class="watch-episode-nav-label">{{ nextEpisode ? '下一集' : '上一集' }}</span>
+          </div>
+
+          <!-- While a swipe is being read, the pending position shows in the bottom-left
+               corner so the viewer can see where the seek will land. -->
+          <div v-if="swipePreviewing" class="watch-scrub-preview" aria-hidden="true" data-test="scrub-preview">
+            <span class="watch-scrub-preview-time">{{ clockTime(swipePreview) }}</span>
+            <span class="watch-scrub-preview-total">/ {{ clockTime(duration) }}</span>
+            <span class="watch-scrub-preview-delta">{{ swipeOffset >= 0 ? '+' : '−' }}{{ Math.abs(Math.round(swipeOffset)) }} 秒</span>
+          </div>
+
+          <!-- A paused picture says so with a mark in the middle, which is also how a
+               viewer knows a tap will not resume it. -->
+          <div v-if="touchUi && sourceUrl && !playing && !swipePreviewing" class="watch-paused-mark" aria-hidden="true" data-test="paused-mark">
+            <PublicIcon name="pause" />
           </div>
 
           <!-- What is playing, named in the top-left corner when the picture loads and
@@ -720,15 +766,15 @@ watch(videoKey, () => {
             </p>
           </transition>
 
-          <!-- Touch hint: the left and right thirds of the picture are seek zones.
-               Shown briefly when playback starts so the gesture is discoverable. -->
+          <!-- Touch hint: a double tap on either side of the picture seeks, a swipe
+               scrubs. Shown briefly when playback starts so it is discoverable. -->
           <div v-if="touchUi && sourceUrl && seekHintShown" class="watch-zone-hint" aria-hidden="true">
             <span class="watch-zone-hint-side">
               <PublicIcon name="back" />
-              <span>后退 {{ SWIPE_STEP }} 秒</span>
+              <span>双击后退 {{ SWIPE_STEP }} 秒</span>
             </span>
             <span class="watch-zone-hint-side">
-              <span>前进 {{ SWIPE_STEP }} 秒</span>
+              <span>双击前进 {{ SWIPE_STEP }} 秒</span>
               <PublicIcon name="back" class="watch-zone-hint-flip" />
             </span>
           </div>
@@ -1004,6 +1050,50 @@ watch(videoKey, () => {
 .watch-next-actions { display: flex; flex-wrap: wrap; gap: 0.45rem; }
 .watch-next-play { min-block-size: 34px; padding-inline: 0.8rem; background: var(--accent); color: var(--on-accent); font-size: 0.8rem; }
 .watch-next-cancel { min-block-size: 34px; padding-inline: 0.7rem; border-color: rgb(255 255 255 / 0.3); background: transparent; color: #fff; font-size: 0.8rem; }
+
+/* The pending seek position during a swipe, in the bottom-left corner above the
+   transport bar, clear of the buttons that live on the same edge. */
+.watch-scrub-preview {
+  position: absolute;
+  z-index: 6;
+  inset-block-end: 4.9rem;
+  inset-inline-start: 0.9rem;
+  display: flex;
+  align-items: baseline;
+  gap: 0.35rem;
+  padding: 0.4rem 0.75rem;
+  border-radius: var(--radius-pill);
+  background: rgb(0 0 0 / 0.82);
+  color: #fff;
+  font-variant-numeric: tabular-nums;
+  pointer-events: none;
+}
+.watch-scrub-preview-time { font-size: 1rem; font-weight: 600; }
+.watch-scrub-preview-total { color: rgb(255 255 255 / 0.55); font-size: 0.76rem; }
+.watch-scrub-preview-delta { margin-inline-start: 0.2rem; color: var(--accent); font-size: 0.76rem; }
+
+/* A paused picture is marked in the middle so the state is unmistakable. */
+.watch-paused-mark {
+  position: absolute;
+  z-index: 5;
+  inset-block-start: 50%;
+  inset-inline-start: 50%;
+  display: grid;
+  place-items: center;
+  inline-size: 4rem;
+  block-size: 4rem;
+  border-radius: 50%;
+  background: rgb(0 0 0 / 0.55);
+  color: #fff;
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+  animation: watch-paused-in 160ms var(--ease);
+}
+@keyframes watch-paused-in {
+  from { opacity: 0; transform: translate(-50%, -50%) scale(0.9); }
+  to { opacity: 1; transform: translate(-50%, -50%) scale(1); }
+}
+.watch-paused-mark :deep(svg) { inline-size: 1.6rem; block-size: 1.6rem; }
 
 /* Episode stepping in the bottom-left corner of the picture. It floats above the
    native control bar, which keeps its own transport on the same edge. */

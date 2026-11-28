@@ -21,6 +21,7 @@
     "test:pager": "node --test tests/browse-pager.test.mjs",
     "test:classify": "node --test tests/admin-classify.test.mjs",
     "test:player": "node --test tests/player-controls.test.mjs",
+    "test:touch": "node --test tests/touch-playback.test.mjs",
     "test:next": "node --test tests/next-episode.test.mjs",
     "test:title": "node --test tests/title-card.test.mjs",
     "test:cards": "node --test tests/card-titles.test.mjs",
