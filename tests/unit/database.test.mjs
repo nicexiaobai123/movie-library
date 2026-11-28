@@ -163,6 +163,31 @@ test('browse filters by actor and orders by title or recency', async (t) => {
   assert.equal(actors.find(actor => actor.name === '演员甲')?.count, 2)
 })
 
+test('home previews only available films and series, with up to 14 newest titles per kind', async (t) => {
+  const { db } = await database(t)
+  const store = libraryStore(db)
+  assert.deepEqual(store.home(), { heroes: [], movies: [], series: [] })
+
+  for (let i = 1; i <= 16; i++) indexMedia(store, entry(`首页剧集${i} 第1集.mp4`), true)
+  indexMedia(store, entry('首页剧集16 第2集.mp4'), true)
+  const seriesOnly = store.home()
+  assert.deepEqual(seriesOnly.movies, [])
+  assert.deepEqual(seriesOnly.heroes, seriesOnly.series.slice(0, 5))
+  assert.equal(seriesOnly.series.length, 14)
+
+  for (let i = 1; i <= 16; i++) indexMedia(store, entry(`首页电影${i}.mp4`), true)
+  indexMedia(store, entry('不可播放的电影.mp4'), false)
+  indexMedia(store, entry('不可播放的剧集 第1集.mp4'), false)
+  const home = store.home()
+  for (const [kind, items] of [['movie', home.movies], ['series', home.series]]) {
+    const browse = store.browse({ q: '', kind, actor: null, sort: 'newest', page: 1, pageSize: 24 })
+    assert.equal(browse.total, 16)
+    assert.equal(items.length, 14)
+    assert.deepEqual(items, browse.items.slice(0, 14))
+  }
+  assert.deepEqual(home.heroes, home.movies.slice(0, 5))
+})
+
 test('visitor accounts and favourites persist across a reopen', async (t) => {
   const { db, name } = await database(t)
   const store = libraryStore(db)

@@ -46,8 +46,9 @@ async function assertSeek(page, url, sourcePath, base) {
   await cdp.send('Network.emulateNetworkConditions', { offline: false, latency: 35, downloadThroughput: 48 * 1024, uploadThroughput: 512 * 1024 })
   try {
     await page.goto(url, { waitUntil: 'domcontentloaded' })
-    const video = page.locator('video[controls][playsinline][preload="metadata"]')
+    const video = page.locator('video[playsinline][preload="metadata"]')
     await video.waitFor()
+    assert.equal(await video.evaluate(media => media.controls), false, 'the video uses the custom transport')
     await page.waitForFunction(() => {
       const media = document.querySelector('video')
       return media && (media.readyState >= 1 || media.error)
@@ -63,7 +64,7 @@ async function assertSeek(page, url, sourcePath, base) {
       const match = /^bytes (\d+)-/.exec(response.headers()['content-range'] ?? '')
       return response.url() === `${base}${sourcePath}` && response.status() === 206 && match && Number(match[1]) > 0
     }, { timeout: 20_000 })
-    // This sets the position of the native player (the same seek action as its timeline).
+    // Change the media time directly to isolate this byte-range check from the UI.
     await video.evaluate((media, time) => { media.currentTime = time }, target)
     const response = await ranged
     await page.waitForFunction(time => {
@@ -215,12 +216,13 @@ test('Edge desktop and mobile viewports: library, editing, episode selection, pl
   await capture(page, 'desktop-my-list')
   await page.context().clearCookies()
 
-  // Home: a rotating hero plus horizontally scrolling rails.
+  // Home: a rotating hero and type-specific catalog previews.
   await page.goto(fx.base)
   await page.locator('.hero-title').waitFor()
   assert.ok(await page.locator('.hero-slide').count() >= 1)
-  await page.locator('.rail').first().waitFor()
-  assert.ok(await page.locator('.rail .card').count() >= 1)
+  const homeMovies = page.getByRole('region', { name: '电影', exact: true })
+  await homeMovies.locator('.card').first().waitFor()
+  assert.equal(await homeMovies.getByRole('link', { name: '查看全部电影' }).getAttribute('href'), '/browse?kind=movie')
   assert.ok(await page.locator('.hero-actions a').count() >= 2)
   await noOverflow(page)
   await capture(page, 'desktop-home')
@@ -274,7 +276,8 @@ test('Edge desktop and mobile viewports: library, editing, episode selection, pl
   await capture(theater, 'desktop-player')
 
   // Clicking or using playback keys must not leave a highlight frame on the picture.
-  await theater.locator('video').click()
+  // Target the picture away from the centred play button.
+  await theater.locator('video').click({ position: { x: 24, y: 72 } })
   await theater.keyboard.press('Space')
   await theater.waitForTimeout(400)
   const outlineAfterPlay = await theater.locator('video').evaluate(node => getComputedStyle(node).outlineStyle)
@@ -308,8 +311,9 @@ test('Edge desktop and mobile viewports: library, editing, episode selection, pl
   await theater.keyboard.press('Tab')
   await theater.waitForTimeout(200)
   assert.equal(await theater.locator('.watch-stage').evaluate(node => node.classList.contains('is-tab-focus')), true)
-  await theater.getByRole('button', { name: '全屏播放' }).click()
-  await theater.waitForFunction(() => document.fullscreenElement?.classList.contains('watch-stage'))
+  const fullscreen = theater.locator(sel('player-fullscreen'))
+  await fullscreen.click()
+  await theater.waitForFunction(() => document.fullscreenElement === document.querySelector('.watch-stage'))
   await theater.locator('.watch-stage').evaluate(node => {
     // Wait until the fullscreen styling is actually painted.
     return new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))
@@ -320,10 +324,14 @@ test('Edge desktop and mobile viewports: library, editing, episode selection, pl
   assert.ok(fullscreenBox && view && Math.abs(fullscreenBox.width - view.width) <= 1 && Math.abs(fullscreenBox.height - view.height) <= 1)
   const frame = await theater.locator('.watch-stage').evaluate(node => getComputedStyle(node).borderTopWidth)
   assert.equal(frame, '0px')
-  assert.ok(await theater.getByRole('button', { name: '退出全屏' }).isVisible())
-  await theater.getByRole('button', { name: /铺满屏幕|保持画面比例/ }).click()
-  assert.ok(['contain', 'cover'].includes(await theater.locator('video').evaluate(node => getComputedStyle(node).objectFit)))
-  await theater.getByRole('button', { name: '退出全屏' }).click()
+  assert.match(await fullscreen.getAttribute('aria-label') ?? '', /退出全屏/)
+  const video = theater.locator('video')
+  assert.equal(await video.evaluate(node => getComputedStyle(node).objectFit), 'contain')
+  await theater.locator(sel('player-settings')).click()
+  const fitToggle = theater.getByRole('button', { name: /铺满屏幕|保持画面比例/ })
+  await fitToggle.click()
+  assert.equal(await video.evaluate(node => getComputedStyle(node).objectFit), 'cover')
+  await fullscreen.click()
   await theater.waitForFunction(() => document.fullscreenElement === null)
   await theater.close()
 

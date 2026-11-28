@@ -8,6 +8,7 @@ import { recordPlaybackProgress, useContinueWatching } from '~/composables/usePr
 import { useUserSession } from '~/composables/useUser'
 
 const route = useRoute()
+const router = useRouter()
 const titleId = computed(() => String(route.params.id ?? ''))
 const detailPath = computed(() => `/movie/${encodeURIComponent(titleId.value)}`)
 const { data: detail, status, error, refresh } = await useFetch<TitleDetail>(
@@ -61,15 +62,29 @@ const previousEpisode = computed(() => {
   return list.slice(0, index).reverse().find(episode => episode.media?.available)
 })
 
-function watchEpisode(episode: { id: string }) {
-  return navigateTo({
-    path: `/watch/${encodeURIComponent(titleId.value)}`,
-    query: { episode: episode.id },
-  })
+// One-shot intent: opening a watch URL or picking an episode from the list
+// does not start playback. Only continuation requested here does.
+let episodeAutoplay: { episodeId: string } | null = null
+
+async function watchEpisode(episode: { id: string }, autoplay = false) {
+  cancelEndedCountdown()
+  const intent = autoplay ? { episodeId: episode.id } : null
+  episodeAutoplay = intent
+  try {
+    const failure = await router.push({
+      path: `/watch/${encodeURIComponent(titleId.value)}`,
+      query: { episode: episode.id },
+    })
+    if (failure && episodeAutoplay === intent) episodeAutoplay = null
+  } catch (error) {
+    if (episodeAutoplay === intent) episodeAutoplay = null
+    throw error
+  }
 }
 
 // Reaching the end should move on rather than replay a finished episode, but only
 // when there really is a next one — the film and the last episode just stop.
+const nextEpisodeDelaySeconds = 2
 const endedNextId = ref<string | null>(null)
 const endedCountdown = ref(0)
 let endedTimer: ReturnType<typeof setInterval> | undefined
@@ -94,13 +109,14 @@ function onEnded() {
   const next = nextEpisode.value
   if (!next) return
   endedNextId.value = next.id
-  endedCountdown.value = 5
+  endedCountdown.value = nextEpisodeDelaySeconds
   stopEndedCountdown()
   endedTimer = setInterval(() => {
     endedCountdown.value -= 1
     if (endedCountdown.value > 0) return
-    stopEndedCountdown()
-    if (endedNextId.value) void watchEpisode({ id: endedNextId.value })
+    const episodeId = endedNextId.value
+    if (episodeId) void watchEpisode({ id: episodeId }, true)
+    else cancelEndedCountdown()
   }, 1000)
 }
 const media = computed(() => detail.value?.kind === 'movie' ? detail.value.movie : activeEpisode.value?.media)
@@ -145,7 +161,12 @@ const stage = ref<HTMLElement | null>(null)
 const player = ref<HTMLVideoElement | null>(null)
 const playbackError = ref('')
 const isFullscreen = ref(false)
+const expandedFallback = ref(false)
 const fillScreen = ref(false)
+const settingsOpen = ref(false)
+const settingsButton = ref<HTMLButtonElement | null>(null)
+const pipSupported = ref(false)
+const pipActive = ref(false)
 // Focus rings are for Tab navigation only; playback keys and clicks must not
 // leave a highlight frame around the picture.
 const tabFocus = ref(false)
@@ -161,6 +182,7 @@ const resumePosition = computed(() => {
 })
 const resumeApplied = ref(false)
 const resumeNotice = ref('')
+let resumeTimer: ReturnType<typeof setTimeout> | undefined
 let lastReported = 0
 let reportTimer: ReturnType<typeof setTimeout> | undefined
 
@@ -170,9 +192,10 @@ const rateStorageKey = 'night-library:playback-rate'
 const playbackRate = ref(1)
 
 function readStoredRate(): number {
-  if (typeof localStorage === 'undefined') return 1
-  const stored = Number(localStorage.getItem(rateStorageKey))
-  return (playbackRates as readonly number[]).includes(stored) ? stored : 1
+  try {
+    const stored = Number(localStorage.getItem(rateStorageKey))
+    return (playbackRates as readonly number[]).includes(stored) ? stored : 1
+  } catch { return 1 }
 }
 
 function setPlaybackRate(value: string) {
@@ -217,14 +240,16 @@ function scheduleReport() {
   }, 10_000)
 }
 
-function applyResumePoint() {  const element = player.value
+function applyResumePoint() {
+  const element = player.value
   if (resumeApplied.value || !element || resumePosition.value <= 0) return
   if (!Number.isFinite(element.duration) || element.duration <= 0) return
   if (resumePosition.value >= element.duration - 1) return
   element.currentTime = resumePosition.value
   resumeApplied.value = true
   resumeNotice.value = `已从上次 ${clockTime(resumePosition.value)} 继续播放`
-  setTimeout(() => { resumeNotice.value = '' }, 4000)
+  if (resumeTimer !== undefined) clearTimeout(resumeTimer)
+  resumeTimer = setTimeout(() => { resumeNotice.value = '' }, 4000)
 }
 
 function reportPlaybackError() {
@@ -245,19 +270,23 @@ function reloadVideo() {
 }
 
 const seekStep = 5
-const seekNotice = ref('')
+type NoticeIcon = 'fast-forward' | 'fast-backward' | 'camera' | 'pip' | 'warning'
+const playerNotice = ref<{ text: string; icon: NoticeIcon } | null>(null)
 let noticeTimer: ReturnType<typeof setTimeout> | undefined
 
-// Touch devices get our own transport bar instead of the native one. The native
-// control bar draws its own scrubber knob and double-tap ripple, which cannot be
-// styled away, and both sit over the middle of the picture.
 const touchUi = ref(false)
 const playing = ref(false)
 const progress = ref(0)
 const duration = ref(0)
+const bufferedTo = ref(0)
 const scrubbing = ref(false)
+const volume = ref(1)
+const muted = ref(false)
+const silent = computed(() => muted.value || volume.value === 0)
+const canCapture = ref(false)
 const controlsShown = ref(true)
 let hideTimer: ReturnType<typeof setTimeout> | undefined
+let videoClickTimer: ReturnType<typeof setTimeout> | undefined
 
 function syncTransport() {
   const element = player.value
@@ -266,6 +295,45 @@ function syncTransport() {
   // While dragging, the bar shows the finger position rather than the video's.
   if (!scrubbing.value) progress.value = element.currentTime
   playing.value = !element.paused && !element.ended
+  canCapture.value = element.readyState >= 2 && element.videoWidth > 0
+  bufferedTo.value = 0
+  const { buffered, currentTime } = element
+  for (let i = 0; i < buffered.length; i++) {
+    if (buffered.start(i) <= currentTime && currentTime <= buffered.end(i)) {
+      bufferedTo.value = buffered.end(i)
+      break
+    }
+  }
+}
+
+function syncVolume() {
+  if (!player.value) return
+  volume.value = player.value.volume
+  muted.value = player.value.muted
+}
+
+function toggleMute() {
+  const element = player.value
+  if (!element) return
+  if (volume.value === 0) {
+    element.volume = 1
+    element.muted = false
+  } else {
+    element.muted = !element.muted
+  }
+  revealControls()
+}
+
+function setVolume(event: Event) {
+  const element = player.value
+  if (!element) return
+  element.volume = (event.target as HTMLInputElement).valueAsNumber
+  element.muted = false
+  revealControls()
+}
+
+function trackPercent(seconds: number) {
+  return `${duration.value ? Math.min(100, (seconds / duration.value) * 100) : 0}%`
 }
 
 function revealControls() {
@@ -280,7 +348,8 @@ function revealControls() {
 
 // Teach the seek zones the first time playback starts on a touch device.
 function showZoneHintOnce() {
-  if (seekHintShown.value || hintTimer !== undefined) return
+  if (!touchUi.value || seekHintSeen) return
+  seekHintSeen = true
   seekHintShown.value = true
   hintTimer = setTimeout(() => {
     hintTimer = undefined
@@ -298,54 +367,39 @@ function togglePlay() {
 
 function seekTo(seconds: number) {
   const element = player.value
-  if (!element || !Number.isFinite(seconds)) return
-  const end = Number.isFinite(element.duration) ? element.duration : 0
-  const target = Math.min(Math.max(seconds, 0), Math.max(end - 0.05, 0))
+  if (!element || !duration.value || !Number.isFinite(seconds)) return
+  const target = Math.min(Math.max(seconds, 0), Math.max(duration.value - 0.05, 0))
   element.currentTime = target
   progress.value = target
 }
 
-// A tap on the scrubber jumps there; a drag follows the finger.
-function scrubFromEvent(event: PointerEvent) {
-  const track = event.currentTarget as HTMLElement
-  const rect = track.getBoundingClientRect()
-  if (!rect.width || !duration.value) return 0
-  const ratio = Math.min(Math.max((event.clientX - rect.left) / rect.width, 0), 1)
-  return ratio * duration.value
-}
-
-function onScrubStart(event: PointerEvent) {
-  if (!duration.value) return
+// Let the range input handle pointer, keyboard and assistive input. Preview a
+// drag with `input`, then seek on `change` rather than re-decoding every frame.
+function previewScrub(event: Event) {
   scrubbing.value = true
+  progress.value = (event.target as HTMLInputElement).valueAsNumber
   revealControls()
-  ;(event.currentTarget as HTMLElement).setPointerCapture?.(event.pointerId)
-  progress.value = scrubFromEvent(event)
 }
 
-function onScrubMove(event: PointerEvent) {
-  if (!scrubbing.value) return
-  progress.value = scrubFromEvent(event)
-}
-
-function onScrubEnd(event: PointerEvent) {
-  if (!scrubbing.value) return
-  const target = scrubFromEvent(event)
+function commitScrub(event: Event) {
   scrubbing.value = false
-  seekTo(target)
+  seekTo((event.target as HTMLInputElement).valueAsNumber)
   revealControls()
-  ;(event.currentTarget as HTMLElement).releasePointerCapture?.(event.pointerId)
 }
 
-// Touch seeking works without the native bar. A sideways swipe scrubs, but it only
-// previews while the finger moves and applies the seek once it lifts: writing
-// `currentTime` on every move makes the decoder thrash and the picture stutter.
+function cancelScrub() {
+  scrubbing.value = false
+  syncTransport()
+  revealControls()
+}
+
+// A sideways swipe only previews until release, just like the progress bar.
 const TAP_ZONE = 0.3
-// A double tap on either side, and the arrow keys, step by the same amount.
-const SWIPE_STEP = 5
 const SWIPE_SPAN = 20
 const DOUBLE_TAP_MS = 280
 // The zone hint appears once per visit so the gesture is discoverable.
 const seekHintShown = ref(false)
+let seekHintSeen = false
 let hintTimer: ReturnType<typeof setTimeout> | undefined
 
 // The title card names what is playing when the picture first appears, then fades,
@@ -379,10 +433,14 @@ const swipePreview = computed(() => {
   return Math.min(Math.max(swipe.base + swipeOffset.value, 0), Math.max(end - 0.05, 0))
 })
 
-// Double-tap bookkeeping: a single tap must not seek, so the second tap is what
-// commits the gesture.
-let lastTapAt = 0
-let lastTapZone: 'left' | 'right' | 'middle' | null = null
+// Defer showing the controls on a side tap until we know it isn't a seek gesture.
+let pendingSideTap: { zone: 'left' | 'right'; timer: ReturnType<typeof setTimeout> } | null = null
+
+function cancelPendingSideTap() {
+  if (!pendingSideTap) return
+  clearTimeout(pendingSideTap.timer)
+  pendingSideTap = null
+}
 
 function stageRect(): DOMRect | null {
   return stage.value?.getBoundingClientRect() ?? null
@@ -398,9 +456,17 @@ function zoneOf(clientX: number): 'left' | 'right' | 'middle' | null {
 }
 
 function onStagePointerDown(event: PointerEvent) {
-  // Only a finger on the picture itself; our transport bar handles its own taps.
-  if (!touchUi.value || !playerReady()) return
-  if ((event.target as HTMLElement).closest('.watch-transport, .watch-overlay, button, a')) return
+  tabFocus.value = false
+  if (!(event.target instanceof Element)) return
+  if (!event.target.closest('.watch-transport')) settingsOpen.value = false
+  const touchPicture = (touchUi.value || event.pointerType === 'touch' || event.pointerType === 'pen')
+    && event.target === player.value
+  if (!event.isPrimary) return
+  if (!touchPicture || !playerReady()) {
+    cancelPendingSideTap()
+    revealControls()
+    return
+  }
   swipe.active = true
   swipe.pointerId = event.pointerId
   swipe.startX = event.clientX
@@ -411,19 +477,23 @@ function onStagePointerDown(event: PointerEvent) {
 }
 
 function onStagePointerMove(event: PointerEvent) {
-  if (!swipe.active || event.pointerId !== swipe.pointerId) return
+  if (!swipe.active || event.pointerId !== swipe.pointerId) {
+    if (!touchUi.value && event.pointerType === 'mouse') revealControls()
+    return
+  }
   const dx = event.clientX - swipe.startX
   const dy = event.clientY - swipe.startY
   // A mostly-vertical drag is page scrolling, not scrubbing; give it back.
   if (!swipe.moved) {
     if (Math.abs(dy) > Math.abs(dx) && Math.abs(dy) > 12) {
       swipe.active = false
+      cancelPendingSideTap()
       return
     }
     if (Math.abs(dx) < 12) return
+    cancelPendingSideTap()
     swipe.moved = true
     swipePreviewing.value = true
-    revealControls()
     // Capture only once this is clearly a horizontal scrub.
     ;(event.currentTarget as HTMLElement).setPointerCapture?.(event.pointerId)
   }
@@ -438,7 +508,8 @@ function onStagePointerMove(event: PointerEvent) {
 function onStagePointerUp(event: PointerEvent) {
   if (!swipe.active || event.pointerId !== swipe.pointerId) return
   swipe.active = false
-  ;(event.currentTarget as HTMLElement).releasePointerCapture?.(event.pointerId)
+  const target = event.currentTarget as HTMLElement
+  if (target.hasPointerCapture(event.pointerId)) target.releasePointerCapture(event.pointerId)
   const element = player.value
   if (!element) return
   if (swipe.moved) {
@@ -446,26 +517,49 @@ function onStagePointerUp(event: PointerEvent) {
     seekTo(element.currentTime + swipeOffset.value)
     swipePreviewing.value = false
     swipeOffset.value = 0
-    revealControls()
     return
   }
-  // A tap: the picture no longer toggles playback, so the only thing a single tap
-  // does is bring the controls back. Seeking needs a double tap on a side zone.
   const zone = zoneOf(event.clientX)
-  const now = Date.now()
-  const repeated = zone !== null && zone === lastTapZone && now - lastTapAt < DOUBLE_TAP_MS
-  lastTapAt = now
-  lastTapZone = zone
-  if (!repeated) {
+  const repeated = pendingSideTap?.zone === zone
+  cancelPendingSideTap()
+  if (zone !== 'left' && zone !== 'right') {
     revealControls()
-    return
+  } else if (repeated) {
+    seekBy(zone === 'left' ? -seekStep : seekStep)
+  } else {
+    pendingSideTap = {
+      zone,
+      timer: setTimeout(() => {
+        pendingSideTap = null
+        revealControls()
+      }, DOUBLE_TAP_MS),
+    }
   }
-  // Consume the pair so a third tap starts a fresh count.
-  lastTapAt = 0
-  lastTapZone = null
-  if (zone === 'left') seekBy(-SWIPE_STEP)
-  else if (zone === 'right') seekBy(SWIPE_STEP)
-  revealControls()
+}
+
+function onStagePointerCancel(event: PointerEvent) {
+  if (event.pointerId !== swipe.pointerId) return
+  cancelPendingSideTap()
+  swipe.active = false
+  swipePreviewing.value = false
+  swipeOffset.value = 0
+}
+
+function onVideoClick(event: MouseEvent) {
+  if (touchUi.value || ('pointerType' in event && event.pointerType !== 'mouse')) return
+  // Give a double-click a chance to fullscreen without also pausing playback.
+  if (event.detail !== 1 || videoClickTimer !== undefined) return
+  videoClickTimer = setTimeout(() => {
+    videoClickTimer = undefined
+    togglePlay()
+  }, DOUBLE_TAP_MS)
+}
+
+function onVideoDoubleClick() {
+  if (touchUi.value) return
+  if (videoClickTimer !== undefined) clearTimeout(videoClickTimer)
+  videoClickTimer = undefined
+  void toggleFullscreen()
 }
 
 function clockTime(seconds: number) {
@@ -477,20 +571,55 @@ function clockTime(seconds: number) {
   return hours ? `${hours}:${pad(minutes)}:${pad(rest)}` : `${pad(minutes)}:${pad(rest)}`
 }
 
-function showSeekNotice(message: string) {
-  seekNotice.value = message
+function showPlayerNotice(text: string, icon: NoticeIcon) {
+  playerNotice.value = { text, icon }
   if (noticeTimer !== undefined) clearTimeout(noticeTimer)
-  noticeTimer = setTimeout(() => { seekNotice.value = '' }, 1600)
+  noticeTimer = setTimeout(() => { playerNotice.value = null }, 1600)
 }
 
 function seekBy(delta: number): boolean {
   const element = player.value
-  if (!element || !Number.isFinite(element.duration) || element.duration <= 0) return false
-  const target = Math.min(Math.max(element.currentTime + delta, 0), Math.max(element.duration - 0.05, 0))
+  if (!element || !duration.value) return false
+  const target = Math.min(Math.max(element.currentTime + delta, 0), Math.max(duration.value - 0.05, 0))
   if (Math.abs(target - element.currentTime) < 0.01) return false
-  element.currentTime = target
-  showSeekNotice(`${delta > 0 ? '快进' : '快退'} ${Math.round(Math.abs(delta))} 秒 · ${clockTime(target)}`)
+  seekTo(target)
+  showPlayerNotice(`${delta > 0 ? '快进' : '快退'} ${Math.round(Math.abs(delta))} 秒 · ${clockTime(target)}`, delta > 0 ? 'fast-forward' : 'fast-backward')
   return true
+}
+
+function captureFrame() {
+  const element = player.value
+  if (!element || !canCapture.value) return
+  const canvas = document.createElement('canvas')
+  canvas.width = element.videoWidth
+  canvas.height = element.videoHeight
+  const context = canvas.getContext('2d')
+  if (!context) return showPlayerNotice('无法截取当前画面', 'warning')
+  const time = clockTime(element.currentTime).replaceAll(':', '-')
+  const key = videoKey.value
+  try {
+    context.drawImage(element, 0, 0)
+    canvas.toBlob((blob) => {
+      if (element !== player.value || key !== videoKey.value) return
+      if (!blob) return showPlayerNotice('无法截取当前画面', 'warning')
+      const url = URL.createObjectURL(blob)
+      const link = document.createElement('a')
+      link.href = url
+      link.download = `视频截图-${time}.png`
+      link.click()
+      setTimeout(() => URL.revokeObjectURL(url), 30_000)
+      showPlayerNotice('已截取当前画面', 'camera')
+    }, 'image/png')
+  } catch { showPlayerNotice('无法截取当前画面', 'warning') }
+}
+
+async function togglePictureInPicture() {
+  const element = player.value
+  if (!element || !pipSupported.value) return
+  try {
+    if (document.pictureInPictureElement === element) await document.exitPictureInPicture()
+    else await element.requestPictureInPicture()
+  } catch { showPlayerNotice('当前无法使用画中画', 'pip') }
 }
 
 // Keys are adopted only when a real, loadable video is present.
@@ -504,68 +633,135 @@ function typingTarget(target: EventTarget | null): boolean {
   return target.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName)
 }
 
-// Fullscreen the stage rather than the bare <video>, so our own black frame,
-// hint text and key handling stay in control instead of the browser's chrome.
+// Fullscreen the whole stage so its controls and feedback stay in the top layer.
+// Browsers that disallow element fullscreen get an expanded in-page player;
+// fullscreening just the video would lose the overlays on those devices.
 async function toggleFullscreen() {
-  if (document.fullscreenElement) {
-    await document.exitFullscreen?.()
-    return
-  }
   const element = stage.value
-  if (!element?.requestFullscreen) return
-  try { await element.requestFullscreen() } catch { /* the browser refused; keep inline playback */ }
+  if (!element) return
+  settingsOpen.value = false
+  if (expandedFallback.value) {
+    expandedFallback.value = false
+  } else if (document.fullscreenElement === element) {
+    try { await document.exitFullscreen() } catch { /* stay in fullscreen */ }
+  } else {
+    try { await element.requestFullscreen() } catch {
+      if (element === stage.value) expandedFallback.value = true
+    }
+  }
+  syncFullscreen()
+  player.value?.focus({ preventScroll: true })
 }
 
 function syncFullscreen() {
-  const element = document.fullscreenElement
-  const active = Boolean(element) && (element === stage.value || element === player.value)
-  isFullscreen.value = active
-  if (!active) fillScreen.value = false
+  isFullscreen.value = Boolean(stage.value) && (
+    document.fullscreenElement === stage.value || expandedFallback.value
+  )
+  revealControls()
 }
 
 function handlePlayerKey(event: KeyboardEvent) {
   // Leave browser and operating-system shortcuts untouched.
-  if (event.defaultPrevented || event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return
-  if (typingTarget(event.target)) return
-  if (!playerReady()) return
-  // Tab (and Shift+Tab) is how keyboard users locate the player; everything
-  // else is playback and must not leave a highlight frame around the picture.
-  tabFocus.value = event.key === 'Tab'
-  if (event.key === 'f' || event.key === 'F') {
+  if (event.defaultPrevented || event.altKey || event.ctrlKey || event.metaKey) return
+  if (event.key === 'Tab') {
+    tabFocus.value = true
+    return
+  }
+  if (event.key === 'Escape' && settingsOpen.value) {
+    settingsOpen.value = false
+    settingsButton.value?.focus()
+    event.preventDefault()
+    return
+  }
+  if (event.key === 'Escape' && expandedFallback.value) {
     void toggleFullscreen()
     event.preventDefault()
     return
   }
+  if (event.shiftKey || typingTarget(event.target) || !playerReady()) return
+  const target = event.target instanceof Element ? event.target : null
+  if (!target?.closest('.watch-transport')) tabFocus.value = false
+  if (event.key.toLowerCase() === 'f') {
+    if (!event.repeat) void toggleFullscreen()
+    event.preventDefault()
+    return
+  }
+  if (event.code === 'Space' && !target?.closest('button, a, [role="button"]')) {
+    if (!event.repeat) togglePlay()
+    event.preventDefault()
+    return
+  }
   const delta = event.key === 'ArrowRight' ? seekStep : event.key === 'ArrowLeft' ? -seekStep : 0
-  if (!delta) return
-  if (!seekBy(delta)) return
-  event.preventDefault()
+  if (delta && seekBy(delta)) event.preventDefault()
 }
 watch(videoKey, () => {
   playbackError.value = ''
-  seekNotice.value = ''
+  playerNotice.value = null
+  resumeNotice.value = ''
+  resumeApplied.value = false
+  lastReported = 0
+  if (reportTimer !== undefined) clearTimeout(reportTimer)
+  reportTimer = undefined
+  if (videoClickTimer !== undefined) clearTimeout(videoClickTimer)
+  videoClickTimer = undefined
+  playing.value = false
+  duration.value = progress.value = bufferedTo.value = 0
+  canCapture.value = scrubbing.value = false
+  swipe.active = swipePreviewing.value = false
+  cancelPendingSideTap()
+  settingsOpen.value = false
   cancelEndedCountdown()
+  revealControls()
 })
-watch(player, (element) => {
-  // Metadata preloading can fail before the SSR video is hydrated.
-  if (element?.error) reportPlaybackError()
+
+watch(videoKey, (key) => {
+  const intent = episodeAutoplay
+  episodeAutoplay = null
+  const element = player.value
+  if (!intent || intent.episodeId !== activeEpisode.value?.id || !element) return
+  // The new src is now on the existing video element, which retains permission
+  // from the viewer starting playback. Let play() wait for the media to load.
+  void element.play().catch((error: unknown) => {
+    if (element !== player.value || key !== videoKey.value) return
+    if (error instanceof DOMException && error.name === 'NotAllowedError') {
+      showPlayerNotice('浏览器限制了自动播放，请点击播放继续', 'warning')
+    }
+  })
 }, { flush: 'post' })
+
+function initTransport(element: HTMLVideoElement) {
+  element.volume = volume.value
+  element.muted = muted.value
+  pipActive.value = document.pictureInPictureElement === element
+  applyPlaybackRate()
+  syncTransport()
+  // Preload can complete or fail before the SSR video is hydrated.
+  if (element.error) reportPlaybackError()
+  else if (playerReady()) {
+    applyResumePoint()
+    showTitleCard()
+  }
+}
+
+watch(player, (element) => {
+  if (element) initTransport(element)
+}, { flush: 'post' })
+watch(stage, (element) => {
+  if (!element) {
+    expandedFallback.value = false
+    isFullscreen.value = false
+  }
+})
 
 onMounted(() => {
   window.addEventListener('keydown', handlePlayerKey, true)
   document.addEventListener('fullscreenchange', syncFullscreen)
   // Leaving mid-film should keep the position; `pagehide` fires on tab close too.
   window.addEventListener('pagehide', flushProgress)
-  // A coarse pointer means a finger, where the native bar's knob and double-tap
-  // ripple would cover the picture; those devices get the custom transport.
-  touchUi.value = window.matchMedia?.('(pointer: coarse)').matches ?? false
+  touchUi.value = window.matchMedia('(pointer: coarse)').matches
+  pipSupported.value = document.pictureInPictureEnabled && typeof player.value?.requestPictureInPicture === 'function'
   playbackRate.value = readStoredRate()
-  applyPlaybackRate()
-  // `preload="metadata"` can finish before this component's listeners are attached,
-  // so ask for the title card directly as well as on the media events.
-  void nextTick(() => {
-    if (playerReady()) showTitleCard()
-  })
+  if (player.value) initTransport(player.value)
 })
 onBeforeUnmount(() => {
   window.removeEventListener('keydown', handlePlayerKey, true)
@@ -577,19 +773,15 @@ onBeforeUnmount(() => {
   if (hideTimer !== undefined) clearTimeout(hideTimer)
   if (hintTimer !== undefined) clearTimeout(hintTimer)
   if (titleCardTimer !== undefined) clearTimeout(titleCardTimer)
+  if (videoClickTimer !== undefined) clearTimeout(videoClickTimer)
+  if (resumeTimer !== undefined) clearTimeout(resumeTimer)
+  cancelPendingSideTap()
   stopEndedCountdown()
 })
 
 function flushProgress() {
-  if (!signedIn.value) return
   reportProgress(true)
 }
-
-// A new episode or film resets the resume bookkeeping for the next video.
-watch(videoKey, () => {
-  resumeApplied.value = false
-  lastReported = 0
-})
 
 </script>
 
@@ -640,116 +832,140 @@ watch(videoKey, () => {
         <div
           ref="stage"
           class="watch-stage"
-          :class="{ 'is-fullscreen': isFullscreen, 'is-fill': fillScreen, 'is-tab-focus': tabFocus, 'is-touch': touchUi }"
+          :class="{ 'is-fullscreen': isFullscreen, 'is-expanded-fallback': expandedFallback, 'is-fill': fillScreen, 'is-tab-focus': tabFocus }"
           @pointerdown="onStagePointerDown"
           @pointermove="onStagePointerMove"
           @pointerup="onStagePointerUp"
-          @pointercancel="onStagePointerUp"
+          @pointercancel="onStagePointerCancel"
         >
           <video
-            :key="videoKey"
+            :key="titleId"
             ref="player"
             :src="sourceUrl"
             :aria-label="activeEpisode ? `播放${detail.title}第 ${activeEpisode.season} 季第 ${activeEpisode.episode} 集` : `播放${detail.title}`"
             tabindex="0"
-            :controls="!touchUi"
             playsinline
             preload="metadata"
             @error="reportPlaybackError"
             @loadedmetadata="playbackError = ''; applyResumePoint(); applyPlaybackRate(); syncTransport(); showTitleCard()"
-            @canplay="showTitleCard()"
+            @loadeddata="syncTransport"
+            @canplay="syncTransport(); showTitleCard()"
+            @progress="syncTransport"
             @timeupdate="scheduleReport(); syncTransport()"
-            @durationchange="syncTransport()"
-            @play="syncTransport(); revealControls(); showZoneHintOnce()"
+            @durationchange="syncTransport"
+            @volumechange="syncVolume"
+            @enterpictureinpicture="pipActive = true"
+            @leavepictureinpicture="pipActive = false"
+            @play="cancelEndedCountdown(); syncTransport(); revealControls(); showZoneHintOnce()"
             @pause="reportProgress(true); syncTransport(); revealControls()"
             @ended="onEnded"
-            @dblclick="touchUi ? undefined : toggleFullscreen()"
+            @click="onVideoClick"
+            @dblclick="onVideoDoubleClick"
+            @contextmenu.prevent
           >
             当前浏览器不支持网页视频。<a :href="downloadUrl" download>下载原文件</a>后可用本地播放器观看。
           </video>
 
-          <!-- Touch transport: play/pause and a scrubber we draw ourselves, so the
-               native knob and its double-tap ripple never appear over the picture. -->
-          <div
-            v-if="touchUi && sourceUrl"
-            class="watch-transport"
-            :class="{ 'is-hidden': !controlsShown }"
-            @click.self="controlsShown = playing ? false : true"
-          >            <button
-              class="watch-transport-button"
-              type="button"
-              :aria-label="playing ? '暂停' : '播放'"
-              data-test="touch-play"
-              @click="togglePlay"
-            >
-              <PublicIcon :name="playing ? 'pause' : 'play'" />
-            </button>
-            <!-- The next episode sits with the transport on the left, not pushed to
-                 the far right of the bar. -->
-            <button
-              v-if="nextEpisode"
-              class="watch-transport-button watch-transport-next"
-              type="button"
-              :aria-label="`下一集：第 ${nextEpisode.season} 季第 ${nextEpisode.episode} 集`"
-              data-test="touch-next"
-              @click="watchEpisode(nextEpisode)"
-            >
-              <PublicIcon name="next" />
-            </button>
-            <span class="watch-transport-clock" data-test="touch-clock">{{ clockTime(progress) }}</span>
-            <div
+          <div class="watch-transport" :class="{ 'is-hidden': !controlsShown && !settingsOpen }" role="group" aria-label="播放控制">
+            <input
+              type="range"
+              dir="ltr"
               class="watch-transport-track"
-              role="slider"
-              tabindex="0"
+              min="0"
+              :max="duration"
+              step="any"
+              :value="progress"
+              :disabled="!duration"
+              :style="{ '--played': trackPercent(progress), '--buffered': trackPercent(bufferedTo) }"
               aria-label="播放进度"
-              :aria-valuemin="0"
-              :aria-valuemax="Math.round(duration)"
-              :aria-valuenow="Math.round(progress)"
               :aria-valuetext="`${clockTime(progress)} / ${clockTime(duration)}`"
-              data-test="touch-track"
-              @pointerdown.prevent="onScrubStart"
-              @pointermove.prevent="onScrubMove"
-              @pointerup.prevent="onScrubEnd"
-              @pointercancel="onScrubEnd"
+              data-test="player-track"
+              @input="previewScrub"
+              @change="commitScrub"
+              @pointercancel="cancelScrub"
               @keydown.left.prevent="seekBy(-seekStep)"
               @keydown.right.prevent="seekBy(seekStep)"
             >
-              <span class="watch-transport-fill" :style="{ inlineSize: `${duration ? (progress / duration) * 100 : 0}%` }" />
+            <div class="watch-transport-row">
+              <div class="watch-transport-group">
+                <button
+                  class="watch-transport-button watch-play-button" type="button"
+                  :aria-label="playing ? '暂停' : '播放'" :title="playing ? '暂停' : '播放'"
+                  :disabled="Boolean(playbackError)" data-test="player-play" @click="togglePlay"
+                >
+                  <PublicIcon :name="playing ? 'pause' : 'play'" />
+                </button>
+                <button
+                  v-if="previousEpisode" type="button" class="watch-transport-button"
+                  :title="`上一集：第 ${previousEpisode.season} 季第 ${previousEpisode.episode} 集`"
+                  :aria-label="`上一集：第 ${previousEpisode.season} 季第 ${previousEpisode.episode} 集`"
+                  data-test="episode-prev" @click="watchEpisode(previousEpisode)"
+                >
+                  <PublicIcon name="next" class="watch-step-back" />
+                </button>
+                <button
+                  v-if="nextEpisode" type="button" class="watch-transport-button"
+                  :title="`下一集：第 ${nextEpisode.season} 季第 ${nextEpisode.episode} 集`"
+                  :aria-label="`下一集：第 ${nextEpisode.season} 季第 ${nextEpisode.episode} 集`"
+                  data-test="episode-next" @click="watchEpisode(nextEpisode, true)"
+                >
+                  <PublicIcon name="next" />
+                </button>
+                <button
+                  class="watch-transport-button" type="button" :title="silent ? '恢复声音' : '静音'"
+                  :aria-label="silent ? '恢复声音' : '静音'" data-test="player-volume" @click="toggleMute"
+                >
+                  <PublicIcon :name="silent ? 'muted' : 'volume'" />
+                </button>
+                <span class="watch-transport-clock" data-test="player-clock">{{ clockTime(progress) }} / {{ clockTime(duration) }}</span>
+              </div>
+              <div class="watch-transport-group">
+                <label class="watch-speed" :title="`播放速度：${playbackRate}×`">
+                  <span aria-hidden="true">{{ playbackRate === 1 ? '倍速' : `${playbackRate}×` }}</span>
+                  <select
+                    :value="String(playbackRate)" aria-label="播放速度" data-test="watch-speed"
+                    @change="setPlaybackRate(($event.target as HTMLSelectElement).value); revealControls()"
+                  >
+                    <option v-for="rate in playbackRates" :key="rate" :value="String(rate)">{{ rate }}×</option>
+                  </select>
+                </label>
+                <button
+                  class="watch-transport-button" type="button" title="视频截图" aria-label="视频截图"
+                  :disabled="!canCapture" data-test="player-screenshot" @click="captureFrame"
+                >
+                  <PublicIcon name="camera" />
+                </button>
+                <button
+                  ref="settingsButton" class="watch-transport-button" type="button" title="播放设置" aria-label="播放设置"
+                  :aria-expanded="settingsOpen" aria-controls="watch-player-settings" data-test="player-settings"
+                  @click="settingsOpen = !settingsOpen"
+                >
+                  <PublicIcon name="gear" />
+                </button>
+                <div v-show="settingsOpen" id="watch-player-settings" class="watch-settings" role="group" aria-label="播放设置">
+                  <label class="watch-settings-volume">
+                    音量
+                    <input type="range" min="0" max="1" step="0.01" :value="silent ? 0 : volume" @input="setVolume">
+                  </label>
+                  <button class="watch-settings-fit" type="button" @click="fillScreen = !fillScreen">
+                    {{ fillScreen ? '保持画面比例' : '铺满屏幕' }}
+                  </button>
+                </div>
+                <button
+                  v-if="pipSupported" class="watch-transport-button" type="button"
+                  :title="pipActive ? '退出画中画' : '画中画'" :aria-label="pipActive ? '退出画中画' : '画中画'"
+                  :disabled="!canCapture" data-test="player-pip" @click="togglePictureInPicture"
+                >
+                  <PublicIcon name="pip" />
+                </button>
+                <button
+                  class="watch-transport-button" type="button" :title="isFullscreen ? '退出全屏' : '全屏播放'"
+                  :aria-label="isFullscreen ? '退出全屏' : '全屏播放'" data-test="player-fullscreen" @click="toggleFullscreen"
+                >
+                  <PublicIcon :name="isFullscreen ? 'collapse' : 'expand'" />
+                </button>
+              </div>
             </div>
-            <span class="watch-transport-clock">{{ clockTime(duration) }}</span>
-          </div>
-
-          <!-- Episode stepping floats over the picture, above the native control bar.
-               A <video> cannot host custom buttons inside its own chrome, so an overlay
-               anchored to the stage is how this is done. Icon only: the tooltip names
-               the episode, and it is faint until hovered so it stays out of the way. -->
-          <div
-            v-if="!touchUi && (nextEpisode || previousEpisode)"
-            class="watch-step-overlay"
-            data-test="episode-nav"
-          >
-            <button
-              v-if="previousEpisode"
-              type="button"
-              class="watch-step-button"
-              :title="`上一集：第 ${previousEpisode.season} 季第 ${previousEpisode.episode} 集`"
-              :aria-label="`上一集：第 ${previousEpisode.season} 季第 ${previousEpisode.episode} 集`"
-              data-test="episode-prev"
-              @click="watchEpisode(previousEpisode)"
-            >
-              <PublicIcon name="next" class="watch-step-back" />
-            </button>
-            <button
-              v-if="nextEpisode"
-              type="button"
-              class="watch-step-button"
-              :title="`下一集：第 ${nextEpisode.season} 季第 ${nextEpisode.episode} 集`"
-              :aria-label="`下一集：第 ${nextEpisode.season} 季第 ${nextEpisode.episode} 集`"
-              data-test="episode-next"
-              @click="watchEpisode(nextEpisode)"
-            >
-              <PublicIcon name="next" />
-            </button>
           </div>
 
           <!-- While a swipe is being read, the pending position shows in the bottom-left
@@ -760,10 +976,15 @@ watch(videoKey, () => {
             <span class="watch-scrub-preview-delta">{{ swipeOffset >= 0 ? '+' : '−' }}{{ Math.abs(Math.round(swipeOffset)) }} 秒</span>
           </div>
 
-          <!-- A paused picture says so in the middle, on every device. -->
-          <div v-if="sourceUrl && !playing && !swipePreviewing" class="watch-paused-mark" aria-hidden="true" data-test="paused-mark">
-            <PublicIcon name="pause" />
-          </div>
+          <button
+            v-if="!playing && !swipePreviewing && !playbackError && !endedCountdown"
+            type="button" class="watch-paused-mark" aria-label="继续播放" data-test="paused-mark" @click="togglePlay"
+          >
+            <svg viewBox="0 0 84 80" aria-hidden="true" focusable="false">
+              <path d="m35 17-7-10m21 10 7-10" fill="none" stroke="currentColor" stroke-width="8" stroke-linecap="round" />
+              <path fill="currentColor" fill-rule="evenodd" d="M23 14h38c14 0 19 6 19 19v23c0 13-6 20-19 20H23C10 76 4 69 4 56V33c0-13 5-19 19-19Zm15 18c-4-2.6-8 0-8 4.8v17c0 4.8 4 7.4 8 4.8L54 49c3.9-2.4 3.9-6.2 0-8.6Z" />
+            </svg>
+          </button>
 
           <!-- What is playing, named in the top-left corner when the picture loads and
                then faded out, so it never lingers over the film. -->
@@ -779,16 +1000,20 @@ watch(videoKey, () => {
           <div v-if="touchUi && sourceUrl && seekHintShown" class="watch-zone-hint" aria-hidden="true">
             <span class="watch-zone-hint-side">
               <PublicIcon name="back" />
-              <span>双击后退 {{ SWIPE_STEP }} 秒</span>
+              <span>双击后退 {{ seekStep }} 秒</span>
             </span>
             <span class="watch-zone-hint-side">
-              <span>双击前进 {{ SWIPE_STEP }} 秒</span>
+              <span>双击前进 {{ seekStep }} 秒</span>
               <PublicIcon name="back" class="watch-zone-hint-flip" />
             </span>
           </div>
 
-          <p v-if="seekNotice" class="watch-seek" aria-hidden="true">{{ seekNotice }}</p>
+          <p v-if="playerNotice" class="watch-seek" role="status">
+            <PublicIcon :name="playerNotice.icon" />
+            <span>{{ playerNotice.text }}</span>
+          </p>
           <p v-else-if="resumeNotice" class="watch-seek" role="status" data-test="resume-notice">{{ resumeNotice }}</p>
+          <p v-if="isFullscreen && playbackError" class="watch-stage-error" role="status">{{ playbackError }}</p>
 
           <!-- A finished episode offers the next one instead of silently stopping. -->
           <div v-if="endedCountdown > 0 && nextEpisode" class="watch-next-card" role="status" data-test="next-up">
@@ -797,7 +1022,7 @@ watch(videoKey, () => {
               <span class="watch-next-seconds">{{ endedCountdown }} 秒</span>
             </p>
             <div class="watch-next-actions">
-              <button class="btn watch-next-play" type="button" data-test="next-up-play" @click="watchEpisode(nextEpisode)">
+              <button class="btn watch-next-play" type="button" data-test="next-up-play" @click="watchEpisode(nextEpisode, true)">
                 立即播放
               </button>
               <button class="btn watch-next-cancel" type="button" data-test="next-up-cancel" @click="cancelEndedCountdown">
@@ -805,25 +1030,7 @@ watch(videoKey, () => {
               </button>
             </div>
           </div>
-          <div v-if="isFullscreen" class="watch-overlay">
-            <button
-              class="watch-overlay-button"
-              type="button"
-              aria-label="退出全屏"
-              @click="toggleFullscreen"
-            >
-              <PublicIcon name="collapse" />
-              <span>退出全屏</span>
-            </button>
-            <button
-              class="watch-overlay-button"
-              type="button"
-              :aria-label="fillScreen ? '保持画面比例，显示黑边' : '拉伸铺满屏幕，裁掉边缘'"
-              @click="fillScreen = !fillScreen"
-            >
-              <span v-text="fillScreen ? '保持比例' : '铺满屏幕'" />
-            </button>
-          </div>
+
         </div>
         <div class="watch-controls">
           <div class="watch-note" role="status">
@@ -836,26 +1043,7 @@ watch(videoKey, () => {
           </div>
           <div class="watch-actions">
             <button v-if="playbackError" type="button" class="btn watch-action" @click="reloadVideo">重新载入</button>
-            <label class="watch-speed">
-              <span class="visually-hidden">播放速度</span>
-              <select
-                class="field"
-                :value="String(playbackRate)"
-                data-test="watch-speed"
-                @change="setPlaybackRate(($event.target as HTMLSelectElement).value)"
-              >
-                <option v-for="rate in playbackRates" :key="rate" :value="String(rate)">{{ rate }}×</option>
-              </select>
-            </label>
-            <button
-              type="button"
-              class="btn watch-action"
-              aria-label="全屏播放"
-              @click="toggleFullscreen"
-            >
-              <PublicIcon name="expand" />
-              <span>全屏</span>
-            </button>
+
             <a v-if="detail.kind === 'series' && detail.episodes.length" href="#watch-episodes" class="btn watch-action">选集</a>
             <a :href="downloadUrl" class="btn watch-action" download>
               <PublicIcon name="download" />
@@ -939,22 +1127,31 @@ watch(videoKey, () => {
 
 .watch-player { margin-block-start: clamp(0.9rem, 2vw, 1.4rem); }
 .watch-stage {
+  --player-pad: clamp(6px, 0.9vw, 12px);
+  --player-button: clamp(24px, 7.5vw, 46px);
+  --player-bottom: calc(70px + env(safe-area-inset-bottom, 0px));
+  --player-accent: #ff5833;
   position: relative;
   overflow: hidden;
   border-radius: var(--radius-md);
   background: #000;
   box-shadow: var(--shadow-player);
 }
-.watch-stage.is-fullscreen,
-.watch-stage:fullscreen {
-  display: grid;
-  place-items: center;
-  inline-size: 100vw;
-  block-size: 100vh;
-  box-sizing: border-box;
+.watch-stage:fullscreen,
+.watch-stage.is-fullscreen {
+  inline-size: 100%;
+  block-size: 100%;
   border: 0;
   border-radius: 0;
+  box-shadow: none;
 }
+.watch-stage.is-expanded-fallback {
+  position: fixed;
+  z-index: 120;
+  inset: 0;
+  block-size: 100dvh;
+}
+:global(html:has(.watch-stage.is-expanded-fallback)) { overflow: hidden; }
 .watch-stage video {
   display: block;
   inline-size: 100%;
@@ -963,80 +1160,122 @@ watch(videoKey, () => {
   aspect-ratio: 16 / 9;
   background: #000;
   object-fit: contain;
+  touch-action: pan-y;
 }
-/* Our own gestures replace the native bar on touch; horizontal drags must not be
-   claimed by the page scroller. */
-.watch-stage.is-touch { touch-action: pan-y; }
-.watch-stage.is-fullscreen video,
-.watch-stage:fullscreen video { inline-size: 100%; block-size: 100%; max-block-size: none; }
-.watch-stage.is-fullscreen.is-fill video { object-fit: cover; }
+.watch-stage:fullscreen video,
+.watch-stage.is-fullscreen video { block-size: 100%; max-block-size: none; }
+.watch-stage.is-fill video { object-fit: cover; }
 .watch-stage video:focus-visible { outline: none; }
-.watch-stage.is-tab-focus video:focus-visible { outline: 2px solid var(--accent-strong); outline-offset: 2px; }
+.watch-stage.is-tab-focus video:focus-visible { outline: 2px solid var(--accent-strong); outline-offset: -2px; }
 
-/* Touch transport: our own bar along the bottom of the picture, replacing the
-   native one so no scrubber knob or double-tap ripple is drawn over the video. */
+/* A thin, uninterrupted seek line, followed by a single row of controls. */
 .watch-transport {
   position: absolute;
-  z-index: 4;
-  inset-inline: 0;
-  inset-block-end: 0;
-  display: flex;
-  align-items: center;
-  gap: 0.6rem;
-  padding: 0.5rem 0.7rem calc(0.5rem + env(safe-area-inset-bottom, 0px));
-  background: linear-gradient(to top, rgb(0 0 0 / 0.82), rgb(0 0 0 / 0));
+  z-index: 8;
+  inset: auto 0 0;
+  padding: 2px var(--player-pad) calc(4px + env(safe-area-inset-bottom, 0px));
+  color: #f0f0f0;
+  background: transparent;
+  text-shadow: 0 1px 3px #000, 0 0 5px rgb(0 0 0 / 0.65);
   transition: opacity var(--dur-fast) var(--ease);
 }
 .watch-transport.is-hidden { opacity: 0; pointer-events: none; }
-.watch-transport-button {
+.watch-stage.is-tab-focus .watch-transport.is-hidden:has(:focus-visible) { opacity: 1; pointer-events: auto; }
+.watch-transport-row,
+.watch-transport-group { display: flex; align-items: center; }
+.watch-transport-row { justify-content: space-between; }
+.watch-transport-group { gap: clamp(0px, calc((100vw - 390px) / 80), 6px); }
+.watch-transport-button,
+.watch-speed {
   display: grid;
   place-items: center;
   flex: none;
-  inline-size: 2.4rem;
-  block-size: 2.4rem;
+  inline-size: var(--player-button);
+  block-size: 44px;
+  padding: 0;
   border: 0;
-  border-radius: 50%;
-  background: rgb(255 255 255 / 0.14);
-  color: #fff;
+  border-radius: 5px;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
 }
-.watch-transport-button :deep(svg) { inline-size: 1.1rem; block-size: 1.1rem; }
+.watch-transport-button :deep(svg) {
+  inline-size: clamp(16px, 4.5vw, 24px);
+  block-size: auto;
+  filter: drop-shadow(0 1px 2px rgb(0 0 0 / 0.9));
+}
+.watch-play-button[aria-label="播放"] :deep(svg) { fill: currentColor; }
+.watch-step-back { transform: rotate(180deg); }
+.watch-transport-button:hover:not(:disabled),
+.watch-transport-button[aria-expanded="true"],
+.watch-speed:hover { color: #fff; background: rgb(255 255 255 / 0.1); }
+.watch-transport-button:disabled { opacity: 0.4; cursor: default; }
 .watch-transport-clock {
   flex: none;
-  color: rgb(255 255 255 / 0.82);
-  font-size: 0.74rem;
+  margin-inline: clamp(2px, 0.7vw, 10px) 2px;
+  color: inherit;
+  font-size: clamp(10px, 2.7vw, 16px);
   font-variant-numeric: tabular-nums;
+  white-space: nowrap;
 }
-.watch-transport-next { margin-inline-start: 0.1rem; }
-/* The track is tall enough to grab with a finger; the visible line stays thin. */
 .watch-transport-track {
-  position: relative;
-  flex: 1 1 auto;
-  min-inline-size: 0;
-  block-size: 1.9rem;
+  appearance: none;
+  display: block;
+  inline-size: 100%;
+  block-size: 20px;
+  margin: 0;
+  border: 0;
+  background: linear-gradient(to right, var(--player-accent) 0 var(--played), #747474 var(--played) max(var(--played), var(--buffered)), #414141 max(var(--played), var(--buffered)) 100%) center / 100% 3px no-repeat;
   cursor: pointer;
   touch-action: none;
 }
-.watch-transport-track::before {
-  content: '';
-  position: absolute;
-  inset-inline: 0;
-  inset-block-start: 50%;
-  block-size: 3px;
-  border-radius: 2px;
-  background: rgb(255 255 255 / 0.26);
-  transform: translateY(-50%);
+.watch-transport-track:disabled { cursor: default; }
+.watch-transport-track::-webkit-slider-thumb {
+  appearance: none;
+  inline-size: 10px;
+  block-size: 10px;
+  border-radius: 50%;
+  background: var(--player-accent);
+  opacity: 0;
 }
-.watch-transport-fill {
-  position: absolute;
-  inset-inline-start: 0;
-  inset-block-start: 50%;
-  block-size: 3px;
-  border-radius: 2px;
-  background: var(--accent);
-  transform: translateY(-50%);
+.watch-transport-track::-moz-range-thumb {
+  inline-size: 10px;
+  block-size: 10px;
+  border: 0;
+  border-radius: 50%;
+  background: var(--player-accent);
+  opacity: 0;
 }
-.watch-transport-track:focus-visible { outline: 2px solid var(--accent-strong); outline-offset: 3px; border-radius: var(--radius-xs); }
-
+.watch-transport-track:is(:hover, :focus-visible, :active):not(:disabled)::-webkit-slider-thumb { opacity: 1; }
+.watch-transport-track:is(:hover, :focus-visible, :active):not(:disabled)::-moz-range-thumb { opacity: 1; }
+.watch-speed { position: relative; font-size: clamp(11px, 3vw, 16px); }
+.watch-speed select {
+  position: absolute;
+  inset: 0;
+  inline-size: 100%;
+  block-size: 100%;
+  opacity: 0;
+  cursor: pointer;
+}
+.watch-transport :is(button, input):focus-visible,
+.watch-speed:has(select:focus-visible) { outline: 2px solid var(--player-accent); outline-offset: -2px; }
+.watch-settings {
+  position: absolute;
+  inset-inline-end: var(--player-pad);
+  inset-block-end: calc(100% + 0.4rem);
+  inline-size: min(13rem, calc(100% - 2 * var(--player-pad)));
+  padding: 0.6rem;
+  border: 1px solid rgb(255 255 255 / 0.16);
+  border-radius: var(--radius-sm);
+  background: #151515;
+  box-shadow: 0 4px 20px rgb(0 0 0 / 0.55);
+  color: #eee;
+  font-size: 0.85rem;
+}
+.watch-settings-volume { display: flex; align-items: center; gap: 0.6rem; padding: 0.3rem; }
+.watch-settings-volume input { min-inline-size: 0; flex: 1; accent-color: var(--player-accent); }
+.watch-settings-fit { inline-size: 100%; padding: 0.4rem; border-radius: var(--radius-sm); text-align: start; }
+.watch-settings-fit:hover { background: rgb(255 255 255 / 0.12); }
 
 /* The end-of-episode card: an offer to keep watching, with a real countdown. */
 .watch-next-card {
@@ -1080,7 +1319,6 @@ watch(videoKey, () => {
 .watch-scrub-preview-total { color: rgb(255 255 255 / 0.55); font-size: 0.76rem; }
 .watch-scrub-preview-delta { margin-inline-start: 0.2rem; color: var(--accent); font-size: 0.76rem; }
 
-/* A paused picture is marked in the middle so the state is unmistakable. */
 .watch-paused-mark {
   position: absolute;
   z-index: 5;
@@ -1088,55 +1326,22 @@ watch(videoKey, () => {
   inset-inline-start: 50%;
   display: grid;
   place-items: center;
-  inline-size: 4rem;
-  block-size: 4rem;
-  border-radius: 50%;
-  background: rgb(0 0 0 / 0.55);
-  color: #fff;
+  inline-size: clamp(3.5rem, 6vw, 5.5rem);
+  aspect-ratio: 84 / 80;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: rgb(255 255 255 / 0.86);
   transform: translate(-50%, -50%);
-  pointer-events: none;
+  cursor: pointer;
   animation: watch-paused-in 160ms var(--ease);
 }
+.watch-paused-mark:hover { color: #fff; }
+.watch-paused-mark svg { display: block; inline-size: 80%; filter: drop-shadow(0 3px 8px rgb(0 0 0 / 0.5)); }
 @keyframes watch-paused-in {
   from { opacity: 0; transform: translate(-50%, -50%) scale(0.9); }
   to { opacity: 1; transform: translate(-50%, -50%) scale(1); }
 }
-.watch-paused-mark :deep(svg) { inline-size: 1.6rem; block-size: 1.6rem; }
-
-/* Episode stepping sits in the action bar with the other controls; the icon carries
-   the meaning and the title tooltip names the exact episode. */
-/* Episode stepping floats just above the native control bar. It stays faint so it
-   does not sit on the picture, and becomes solid on hover or keyboard focus. */
-.watch-step-overlay {
-  position: absolute;
-  z-index: 4;
-  inset-block-end: 3.4rem;
-  inset-inline-start: 0.9rem;
-  display: flex;
-  align-items: center;
-  gap: 0.4rem;
-}
-.watch-step-button {
-  display: grid;
-  place-items: center;
-  inline-size: 2.4rem;
-  block-size: 2.4rem;
-  border: 0;
-  border-radius: 50%;
-  background: rgb(0 0 0 / 0.62);
-  color: rgb(255 255 255 / 0.92);
-  opacity: 0.82;
-  cursor: pointer;
-  transition: opacity var(--dur-fast) var(--ease), background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
-}
-.watch-step-button:hover,
-.watch-step-button:focus-visible { opacity: 1; background: rgb(0 0 0 / 0.85); color: #fff; }
-.watch-step-button:focus-visible { outline: 2px solid var(--accent-strong); outline-offset: 2px; }
-.watch-step-button :deep(svg) { inline-size: 1.05rem; block-size: 1.05rem; }
-.watch-step-back { transform: rotate(180deg); }
-/* The overlay would sit on top of the transport on a phone, which has its own
-   next-episode button, so it is desktop only. */
-.watch-stage.is-touch .watch-step-overlay { display: none; }
 
 /* The title card sits in the top-left corner of the picture for a few seconds after
    the video loads, then fades so nothing remains over the film. */
@@ -1206,57 +1411,26 @@ watch(videoKey, () => {
 .watch-zone-hint-side :deep(svg) { inline-size: 0.9rem; block-size: 0.9rem; }
 .watch-zone-hint-flip { transform: rotate(180deg); }
 
-/* Feedback sits in the bottom-right corner rather than mid-picture, so a seek or
-   resume message never covers the part of the frame being watched. The native
-   control bar occupies the very bottom on desktop, so the message clears it. */
-.watch-seek {
+/* Seek and resume feedback live above the transport, inside the fullscreen stage. */
+.watch-seek,
+.watch-stage-error {
   position: absolute;
   z-index: 6;
-  inset-block-end: 3.4rem;
-  inset-inline-end: 0.9rem;
+  inset-block-end: var(--player-bottom);
+  inset-inline-end: var(--player-pad);
   margin: 0;
   padding: 0.45rem 0.8rem;
   border-radius: var(--radius-pill);
-  background: rgb(0 0 0 / 0.72);
+  background: rgb(0 0 0 / 0.78);
   color: #fff;
   font-size: 0.84rem;
   font-variant-numeric: tabular-nums;
-  white-space: nowrap;
   pointer-events: none;
   backdrop-filter: blur(6px);
 }
-/* On touch the transport bar is taller, so the message lifts above it. */
-.watch-stage.is-touch .watch-seek { inset-block-end: calc(3.6rem + env(safe-area-inset-bottom, 0px)); }
-.watch-overlay {
-  position: absolute;
-  z-index: 5;
-  inset-block-start: 0.9rem;
-  inset-inline-end: 0.9rem;
-  display: flex;
-  flex-wrap: wrap;
-  justify-content: flex-end;
-  gap: 0.55rem;
-  max-inline-size: calc(100% - 1.8rem);
-  pointer-events: none;
-}
-.watch-overlay-button {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.45rem;
-  min-block-size: 40px;
-  padding-inline: 0.9rem;
-  border: 1px solid rgb(255 255 255 / 0.18);
-  border-radius: var(--radius-pill);
-  background: rgb(0 0 0 / 0.6);
-  color: #fff;
-  font-size: 0.82rem;
-  opacity: 0.6;
-  pointer-events: auto;
-  transition: opacity var(--dur-fast) var(--ease), background-color var(--dur-fast) var(--ease);
-}
-.watch-overlay:hover .watch-overlay-button { opacity: 1; }
-.watch-overlay-button:hover, .watch-overlay-button:focus-visible { background: rgb(0 0 0 / 0.85); opacity: 1; }
-.watch-overlay-button :deep(svg) { inline-size: 1rem; block-size: 1rem; }
+.watch-seek { display: inline-flex; align-items: center; gap: 0.4rem; white-space: nowrap; }
+.watch-seek :deep(svg) { inline-size: 1.05rem; block-size: 1.05rem; color: var(--player-accent); }
+.watch-stage-error { inset-inline-start: var(--player-pad); text-align: center; }
 
 .watch-controls {
   display: flex;
@@ -1273,7 +1447,6 @@ watch(videoKey, () => {
 .watch-keys kbd { min-inline-size: 1.45rem; padding: 0.05rem 0.32rem; border: 1px solid var(--border-strong); border-radius: var(--radius-xs); background: var(--bg-card); color: var(--text-secondary); font-family: var(--font-sans); font-size: 0.74rem; text-align: center; }
 .watch-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem; margin-inline-start: auto; }
 .watch-action { min-block-size: 42px; padding-inline: 0.95rem; font-size: 0.84rem; white-space: nowrap; }
-.watch-speed .field { min-block-size: 42px; padding-block: 0; font-size: 0.84rem; font-variant-numeric: tabular-nums; }
 .watch-action :deep(svg) { inline-size: 1rem; block-size: 1rem; }
 .watch-file-size { padding-inline-start: 0.5rem; border-inline-start: 1px solid var(--border-strong); color: var(--text-muted); font-size: 0.74rem; font-variant-numeric: tabular-nums; }
 .watch-episodes { margin-block-start: clamp(1.8rem, 4vw, 3rem); scroll-margin-block-start: calc(var(--header-h) + 1rem); }
@@ -1288,7 +1461,7 @@ watch(videoKey, () => {
 .watch-more-grid li { min-inline-size: 0; }
 
 @media (max-width: 40rem) {
-  .watch-stage { margin-inline: calc(var(--shell-pad) * -1); border-radius: 0; }
+  .watch-stage:not(.is-fullscreen, :fullscreen) { margin-inline: calc(var(--shell-pad) * -1); border-radius: 0; }
   .watch-actions { flex: 1 1 100%; margin-inline-start: 0; }
   .watch-action { flex: 1 1 8rem; }
   .watch-file-size { display: none; }

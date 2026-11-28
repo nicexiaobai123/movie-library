@@ -50,7 +50,8 @@ try {
 
   // 3. Playback page loads a real video element and starts.
   const home = await (await fetch(`${base}/api/library/home`)).json()
-  const film = home.rails.flatMap(rail => rail.items).find(item => item.kind === 'movie' && item.available)
+  const film = home.movies[0]
+  if (!film) throw new Error('The demo library does not contain a film to play')
   await page.goto(`${base}/watch/${film.id}`, { waitUntil: 'networkidle' })
   await page.waitForSelector('video', { timeout: 15000 })
   const videoInfo = await page.evaluate(async () => {

@@ -1,6 +1,7 @@
 <script setup lang="ts">
 defineProps<{
   name: 'lamp' | 'film' | 'search' | 'back' | 'play' | 'pause' | 'next' | 'download' | 'archive' | 'warning' | 'clock' | 'settings' | 'expand' | 'collapse'
+    | 'volume' | 'muted' | 'camera' | 'gear' | 'pip' | 'fast-forward' | 'fast-backward'
 }>()
 </script>
 
@@ -61,6 +62,18 @@ defineProps<{
     <template v-else-if="name === 'collapse'">
       <path d="M9.5 4.5v5h-5m15 0h-5v-5m0 15v-5h5m-15 0h5v5" />
     </template>
+    <template v-else-if="name === 'volume' || name === 'muted'">
+      <path d="M3 9h3.6L12 5v14l-5.4-4H3Z" fill="currentColor" stroke="none" />
+      <path v-if="name === 'volume'" d="M15.3 8.7a4.7 4.7 0 0 1 0 6.6m2.5-9a8 8 0 0 1 0 11.4" />
+      <path v-else d="m15.5 9.5 5 5m0-5-5 5" />
+    </template>
+    <path v-else-if="name === 'camera'" fill="currentColor" stroke="none" fill-rule="evenodd" d="M9 3.5h6l2 3h3a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2v-10a2 2 0 0 1 2-2h3Zm3 5a5 5 0 1 0 0 10 5 5 0 0 0 0-10Zm0 1.7a3.3 3.3 0 1 1 0 6.6 3.3 3.3 0 0 1 0-6.6Z" />
+    <path v-else-if="name === 'gear'" fill="currentColor" stroke="none" fill-rule="evenodd" d="m10 2-.8 2.7-1.7 1L4.8 5l-2 3.5 2 2v2.9l-2 2 2 3.5 2.7-.7 1.7 1L10 22h4l.8-2.8 1.7-1 2.7.7 2-3.5-2-2v-2.9l2-2-2-3.5-2.7.7-1.7-1L14 2Zm2 6.4a3.6 3.6 0 1 0 0 7.2 3.6 3.6 0 0 0 0-7.2Z" />
+    <template v-else-if="name === 'pip'">
+      <path d="M21 11V6a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h5" />
+      <rect x="12" y="13" width="9" height="7" rx="1" fill="currentColor" stroke="none" />
+    </template>
+    <path v-else-if="name === 'fast-forward' || name === 'fast-backward'" :transform="name === 'fast-backward' ? 'translate(24 0) scale(-1 1)' : undefined" fill="currentColor" stroke="none" d="M3.5 5.5a1 1 0 0 1 1.6-.8l8 6V5.5a1 1 0 0 1 1.6-.8l7.5 6.5a1 1 0 0 1 0 1.6l-7.5 6.5a1 1 0 0 1-1.6-.8v-5.2l-8 6a1 1 0 0 1-1.6-.8Z" />
   </svg>
 </template>
 

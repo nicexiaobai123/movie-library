@@ -50,18 +50,8 @@ export interface BrowseResult {
 
 export interface HomeData {
   heroes: LibraryCard[]
-  rails: HomeRail[]
-  total: number
-}
-
-export interface HomeRail {
-  id: string
-  title: string
-  subtitle: string | null
-  presentation: 'poster' | 'wide'
-  // Where "more" leads: the catalogue view that shows the whole collection.
-  href: string
-  items: LibraryCard[]
+  movies: LibraryCard[]
+  series: LibraryCard[]
 }
 
 // One row of the admin file list: the file plus what it was recognised as.

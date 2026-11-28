@@ -1,112 +1,137 @@
-// Two player fixes:
-//  1. Touch devices must not show the native control bar, whose scrubber knob and
-//     double-tap ripple draw a white dot over the middle of the picture.
-//  2. The desktop seek message belongs in the bottom-right corner, never mid-picture.
 import assert from 'node:assert/strict'
-import { mkdir } from 'node:fs/promises'
+import { mkdir, readFile } from 'node:fs/promises'
 import { test } from 'node:test'
 import { chromium } from 'playwright-core'
 import { runtimeFixture } from './helpers/runtime.mjs'
 
-test('touch playback uses our transport, and the desktop notice sits bottom-right', { timeout: 240_000 }, async (t) => {
+const control = id => `[data-test="${id}"]`
+
+async function assertTransportLayout(page, label) {
+  const bar = page.locator('.watch-stage .watch-transport')
+  await bar.locator(control('player-track')).waitFor()
+  const layout = await bar.evaluate(node => {
+    const video = node.closest('.watch-stage').querySelector('video')
+    const row = node.querySelector('.watch-transport-row')
+    const bounds = el => el?.getBoundingClientRect().toJSON()
+    const track = node.querySelector('[data-test="player-track"]')
+    const ids = ['player-play', 'episode-prev', 'episode-next', 'player-volume', 'player-clock',
+      'watch-speed', 'player-screenshot', 'player-settings', 'player-pip', 'player-fullscreen']
+    return {
+      nativeControls: video.controls,
+      backgroundColor: getComputedStyle(node).backgroundColor,
+      backgroundImage: getComputedStyle(node).backgroundImage,
+      hasPiP: document.pictureInPictureEnabled && typeof video.requestPictureInPicture === 'function',
+      stage: bounds(node.closest('.watch-stage')),
+      track: bounds(track),
+      row: bounds(row),
+      buttons: Object.fromEntries(ids.map(id => [id, bounds(row?.querySelector(`[data-test="${id}"]`))])),
+    }
+  })
+  assert.equal(layout.nativeControls, false, `${label}: Edge native controls never render`)
+  assert.equal(layout.backgroundColor, 'rgba(0, 0, 0, 0)', `${label}: the transport has a transparent background`)
+  assert.equal(layout.backgroundImage, 'none', `${label}: no gradient or image obscures the video behind the transport`)
+  const { stage, track, row, buttons } = layout
+  assert.ok(track && row, `${label}: progress track and control row are present`)
+  assert.ok(track.height > 0 && track.width >= row.width * 0.85, `${label}: the progress line spans the row`)
+  assert.ok(track.bottom <= row.top + 1, `${label}: progress track is above the buttons`)
+  assert.ok(row.left >= stage.left - 1 && row.right <= stage.right + 1, `${label}: the control row fits within the player`)
+  const ordered = Object.entries(buttons).filter(([id]) => id !== 'player-pip' || layout.hasPiP)
+  let previousRight = row.left - 1
+  for (const [id, box] of ordered) {
+    assert.ok(box?.width > 0 && box.height > 0, `${label}: ${id} is displayed in the transport row`)
+    assert.ok(box.left >= previousRight - 1, `${label}: ${id} follows the previous control without overlap`)
+    assert.ok(box.right <= stage.right + 1, `${label}: ${id} does not overflow the stage`)
+    assert.ok(box.top >= row.top - 1 && box.bottom <= row.bottom + 1, `${label}: ${id} stays in the button row`)
+    assert.ok(Math.abs(box.y + box.height / 2 - (row.y + row.height / 2)) < 5,
+      `${label}: ${id} is vertically aligned with the other buttons`)
+    previousRight = box.right
+  }
+  if (!layout.hasPiP) assert.equal(buttons['player-pip'], undefined, `${label}: unsupported PiP is omitted`)
+  const midpoint = stage.x + stage.width / 2
+  assert.ok(buttons['episode-next'].right <= midpoint, `${label}: episode navigation is on the left`)
+  assert.ok(buttons['player-settings'].left >= midpoint, `${label}: settings and fullscreen are on the right`)
+  assert.match(await bar.locator(control('episode-next')).getAttribute('title') ?? '', /下一集：第 \d+ 季第 \d+ 集/)
+}
+
+test('Edge: custom transport layout across widths, volume, rate, settings, and frame download', { timeout: 240_000 }, async t => {
   await mkdir('.test-artifacts', { recursive: true })
   const fx = await runtimeFixture(t, { interval: 0, stable: 100 })
   const browser = await chromium.launch({ channel: 'msedge' })
-  const report = []
   try {
     await fx.login()
-    await fx.stage('播放控件.mp4')
+    for (let i = 1; i <= 3; i++) await fx.stage(`播放控件 第${i}集.mp4`)
     await fx.scan()
-    const id = (await (await fx.request('/api/library?kind=movie')).json()).items[0].id
+    const series = (await (await fx.request('/api/library?kind=series')).json()).items[0]
+    const detail = await (await fx.request(`/api/library/${series.id}`)).json()
+    const middle = [...detail.episodes].sort((a, b) => a.episode - b.episode)[1]
+    const url = `${fx.base}/watch/${series.id}?episode=${middle.id}`
 
-    // --- A phone: our own transport, no native controls ---------------------
-    const phone = await browser.newContext({
+    const desktop = await browser.newPage({ viewport: { width: 1440, height: 900 }, locale: 'zh-CN' })
+    await desktop.goto(url, { waitUntil: 'networkidle' })
+    await desktop.waitForFunction(() => document.querySelector('video')?.readyState >= 1, null, { timeout: 20_000 })
+    await assertTransportLayout(desktop, '1440px desktop')
+    await desktop.setViewportSize({ width: 800, height: 900 })
+    await assertTransportLayout(desktop, '800px desktop')
+    await desktop.setViewportSize({ width: 1440, height: 900 })
+
+    const bar = desktop.locator('.watch-transport')
+    const video = desktop.locator('video')
+    const mute = bar.locator(control('player-volume'))
+    await mute.click()
+    await desktop.waitForFunction(() => document.querySelector('video').muted)
+    await mute.click()
+    await desktop.waitForFunction(() => !document.querySelector('video').muted)
+    await bar.locator(control('watch-speed')).selectOption('1.5')
+    assert.equal(await video.evaluate(node => node.playbackRate), 1.5, 'the speed control changes actual media playback rate')
+
+    const settings = bar.locator(control('player-settings'))
+    await settings.click()
+    const volume = bar.locator('input[type="range"]:not([data-test="player-track"])')
+    await volume.waitFor()
+    await volume.press('Home')
+    assert.equal(await video.evaluate(node => node.volume), 0, 'the volume slider can reach zero volume')
+    await volume.press('End')
+    assert.equal(await video.evaluate(node => node.volume), 1, 'the volume slider can restore full volume')
+    await settings.click()
+    await volume.waitFor({ state: 'hidden' })
+
+    // Wait for a decoded frame, then exercise the actual browser download path.
+    await video.evaluate(node => { node.currentTime = 2 })
+    await desktop.waitForFunction(() => {
+      const video = document.querySelector('video')
+      return video.readyState >= 2 && !video.seeking
+    }, null, { timeout: 20_000 })
+    const [frame] = await Promise.all([
+      desktop.waitForEvent('download', { timeout: 10_000 }),
+      bar.locator(control('player-screenshot')).click(),
+    ])
+    assert.match(frame.suggestedFilename(), /\.png$/i)
+    const png = await readFile(await frame.path())
+    assert.equal(png.subarray(0, 8).toString('hex'), '89504e470d0a1a0a', 'the download is a PNG')
+    assert.equal(png.subarray(12, 16).toString(), 'IHDR')
+    assert.ok(png.readUInt32BE(16) > 0 && png.readUInt32BE(20) > 0, 'the PNG contains a nonempty frame')
+
+    const phone = await browser.newPage({
       viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true, deviceScaleFactor: 3, locale: 'zh-CN',
     })
-    const page = await phone.newPage()
-    await page.goto(`${fx.base}/watch/${id}`, { waitUntil: 'networkidle' })
-    await page.locator('video').waitFor()
-    await page.waitForFunction(() => document.querySelector('video')?.readyState >= 1, null, { timeout: 20_000 })
+    await phone.goto(url, { waitUntil: 'networkidle' })
+    await phone.waitForFunction(() => document.querySelector('video')?.readyState >= 1, null, { timeout: 20_000 })
+    await assertTransportLayout(phone, '390px touch')
+    await phone.screenshot({ path: '.test-artifacts/transport-phone.png' })
+    await phone.setViewportSize({ width: 320, height: 812 })
+    await assertTransportLayout(phone, '320px touch')
 
-    const phoneState = await page.evaluate(() => {
+    const track = phone.locator(control('player-track'))
+    const box = await track.boundingBox()
+    assert.ok(box, 'the touch track is available to tap')
+    await phone.touchscreen.tap(box.x + box.width / 2, box.y + box.height / 2)
+    await phone.waitForFunction(() => {
       const video = document.querySelector('video')
-      return {
-        nativeControls: video.controls,
-        transport: document.querySelectorAll('.watch-transport').length,
-        track: document.querySelectorAll('[data-test="touch-track"]').length,
-      }
-    })
-    report.push(`phone: ${JSON.stringify(phoneState)}`)
-    assert.equal(phoneState.nativeControls, false, 'the native control bar is off on touch')
-    assert.equal(phoneState.transport, 1, 'our transport bar is present')
-    assert.equal(phoneState.track, 1, 'our scrubber is present')
-    await page.screenshot({ path: '.test-artifacts/transport-phone.png' })
-
-    // Playing toggles through our own button and the bar hides itself again.
-    await page.locator('[data-test="touch-play"]').tap()
-    await page.waitForFunction(() => !document.querySelector('video').paused, null, { timeout: 10_000 })
-    report.push('phone play works')
-    await page.locator('[data-test="touch-play"]').tap()
-    await page.waitForFunction(() => document.querySelector('video').paused, null, { timeout: 10_000 })
-    report.push('phone pause works')
-
-    // Tapping the scrubber seeks, and no native knob is drawn.
-    const box = await page.locator('[data-test="touch-track"]').boundingBox()
-    await page.touchscreen.tap(box.x + box.width * 0.5, box.y + box.height / 2)
-    await page.waitForTimeout(400)
-    const seeked = await page.evaluate(() => Number(document.querySelector('video').currentTime.toFixed(1)))
-    report.push(`phone scrub -> ${seeked}s of ${await page.evaluate(() => Math.round(document.querySelector('video').duration))}s`)
-    assert.ok(seeked > 15, 'tapping the middle of the scrubber seeks forward')
-    await page.screenshot({ path: '.test-artifacts/transport-phone-seeked.png' })
-
-
-    // --- Desktop: the notice is anchored bottom-right, not centred -----------
-    const desktop = await browser.newContext({ viewport: { width: 1440, height: 900 }, locale: 'zh-CN' })
-    const desk = await desktop.newPage()
-    await desk.goto(`${fx.base}/watch/${id}`, { waitUntil: 'networkidle' })
-    await desk.locator('video').waitFor()
-    await desk.waitForFunction(() => document.querySelector('video')?.readyState >= 1, null, { timeout: 20_000 })
-    const deskState = await desk.evaluate(() => ({
-      nativeControls: document.querySelector('video').controls,
-      transport: document.querySelectorAll('.watch-transport').length,
-    }))
-    report.push(`desktop: ${JSON.stringify(deskState)}`)
-    assert.equal(deskState.nativeControls, true, 'the desktop keeps the native controls')
-    assert.equal(deskState.transport, 0, 'the desktop has no touch transport')
-
-    await desk.locator('body').click({ position: { x: 4, y: 4 } })
-    await desk.keyboard.press('ArrowRight')
-    await desk.waitForTimeout(300)
-    const notice = await desk.evaluate(() => {
-      const node = document.querySelector('.watch-seek')
-      const stage = document.querySelector('.watch-stage').getBoundingClientRect()
-      const rect = node.getBoundingClientRect()
-      return {
-        text: node.textContent.trim(),
-        centreX: rect.x + rect.width / 2,
-        centreY: rect.y + rect.height / 2,
-        stageCentreX: stage.x + stage.width / 2,
-        stageCentreY: stage.y + stage.height / 2,
-        rightGap: Math.round(stage.right - rect.right),
-        bottomGap: Math.round(stage.bottom - rect.bottom),
-      }
-    })
-    report.push(`desktop notice: ${JSON.stringify(notice)}`)
-    assert.match(notice.text, /快进 5 秒/)
-    // The critical property: it is nowhere near the middle of the picture.
-    const dx = Math.abs(notice.centreX - notice.stageCentreX)
-    const dy = Math.abs(notice.centreY - notice.stageCentreY)
-    report.push(`offset from centre: ${Math.round(dx)}px, ${Math.round(dy)}px`)
-    assert.ok(dx > 150 || dy > 100, `the notice must leave the centre, offset ${Math.round(dx)}/${Math.round(dy)}`)
-    assert.ok(notice.rightGap <= 24, `hugs the right edge, gap ${notice.rightGap}px`)
-    // It sits above the native control bar rather than on top of it.
-    assert.ok(notice.bottomGap >= 40 && notice.bottomGap <= 90, `clears the control bar, gap ${notice.bottomGap}px`)
-    await desk.screenshot({ path: '.test-artifacts/notice-bottom-right.png' })
-
-    await phone.close()
-    await desktop.close()
+      return !video.seeking && Math.abs(video.currentTime - video.duration / 2) < 1
+    }, null, { timeout: 10_000 })
+    assert.match(await phone.locator(control('player-clock')).textContent(), /0{1,2}:24\s*\/\s*0{1,2}:48/)
+    await phone.screenshot({ path: '.test-artifacts/transport-phone-seeked.png' })
   } finally {
-    console.log(report.join('\n'))
     await browser.close()
   }
 })

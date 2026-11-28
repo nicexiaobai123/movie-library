@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import type { DatabaseSync } from 'node:sqlite'
 import type {
-  ActorSummary, AdminMedia, AdminTitle, BrowseQuery, BrowseResult, HomeData, HomeRail, LibraryCard,
+  ActorSummary, AdminMedia, AdminTitle, BrowseQuery, BrowseResult, HomeData, LibraryCard,
   LibraryEpisode, LibraryKind, PlayableMedia, ScanResult, TitleDetail,
 } from '../../shared/types/library.ts'
 import { transaction } from './database.ts'
@@ -77,9 +77,8 @@ export function libraryStore(db: DatabaseSync) {
 
   const sql = {
     allTitles: db.prepare('SELECT * FROM titles ORDER BY title COLLATE NOCASE, year, rowid'),
-    published: db.prepare(`SELECT t.*, EXISTS (SELECT 1 FROM media_files p
-        WHERE p.title_id = t.id AND p.available = 1) AS available
-      FROM titles t WHERE ${hasFiles} AND t.kind = ? ORDER BY t.created_at DESC, t.rowid DESC`),
+    published: db.prepare(`SELECT t.* FROM titles t
+      WHERE ${hasFiles} AND t.kind = ? ORDER BY t.created_at DESC, t.rowid DESC LIMIT ?`),
     title: db.prepare('SELECT * FROM titles WHERE id = ?'),
     identity: db.prepare('SELECT * FROM titles WHERE identity_key = ?'),
     addTitle: db.prepare(`INSERT INTO titles (id, kind, title, year, description, poster_path, identity_key, created_at, cast_members)
@@ -127,8 +126,8 @@ export function libraryStore(db: DatabaseSync) {
     }
   }
 
-  const publishedRows = () => sql.published.all('movie').concat(sql.published.all('series')) as unknown as TitleRecord[]
-  const allCards = () => publishedRows().map(card)
+  const publishedByKind = (kind: LibraryKind, limit = -1) => sql.published.all(kind, limit) as unknown as TitleRecord[]
+  const publishedRows = () => publishedByKind('movie').concat(publishedByKind('series'))
 
   // Runtime is a property of the files, not the title, so it is summed on read.
   function runtimeOf(titleId: string): number | null {
@@ -159,31 +158,11 @@ export function libraryStore(db: DatabaseSync) {
   }
 
   function home(): HomeData {
-    const items = allCards()
-    const rails: HomeRail[] = []
-    const railKeys: string[] = []
-    const addRail = (
-      id: string,
-      railTitle: string,
-      subtitle: string | null,
-      list: LibraryCard[],
-      href: string,
-      presentation: HomeRail['presentation'] = 'poster',
-    ) => {
-      const unique = [...new Map(list.map(item => [item.id, item])).values()]
-      const key = unique.map(item => item.id).join(',')
-      if (!key || railKeys.includes(key)) return
-      railKeys.push(key)
-      rails.push({ id, title: railTitle, subtitle, presentation, href, items: unique })
-    }
-    addRail('new', '最新入库', null, items, '/browse')
-    addRail('series', '剧集', '按季、按集连续观看', items.filter(item => item.kind === 'series'), '/browse?kind=series')
-    addRail('all', '全部馆藏', null, items, '/browse', 'wide')
-    return {
-      heroes: items.slice(0, 5),
-      rails,
-      total: items.length,
-    }
+    // Two rows of seven at the widest home layout; narrower grids show fewer.
+    const previewLimit = 14
+    const movies = publishedByKind('movie', previewLimit).map(card)
+    const series = publishedByKind('series', previewLimit).map(card)
+    return { heroes: [...movies, ...series].slice(0, 5), movies, series }
   }
 
   // Actors are derived from each title's cast list; there is no separate table, so

@@ -12,11 +12,9 @@ useSeoMeta({
   description: '在局域网内浏览、播放和下载自己的电影馆藏。',
 })
 
-const { data, status, refresh } = await useFetch<HomeData>('/api/library/home', { deep: false })
-const home = computed(() => data.value)
-const rails = computed(() => home.value?.rails ?? [])
+const { data: home, status, refresh } = await useFetch<HomeData>('/api/library/home', { deep: false })
 const heroes = computed(() => home.value?.heroes ?? [])
-const empty = computed(() => status.value === 'success' && !rails.value.length)
+const empty = computed(() => status.value === 'success' && !heroes.value.length)
 
 // Resume points only exist for signed-in visitors, so the row stays hidden otherwise.
 const { signedIn } = await useUserSession()
@@ -49,16 +47,8 @@ const resumable = computed(() => signedIn.value ? resumeItems.value : [])
 
     <template v-else>
       <ContinueWatching v-if="resumable.length" :items="resumable" />
-      <MovieRail
-        v-for="(rail, index) in rails"
-        :key="rail.id"
-        :title="rail.title"
-        :subtitle="rail.subtitle"
-        :href="rail.href"
-        :items="rail.items"
-        :wide="rail.presentation === 'wide'"
-        :priority="index === 0"
-      />
+      <MovieRail v-if="home?.movies.length" kind="movie" :items="home.movies" priority />
+      <MovieRail v-if="home?.series.length" kind="series" :items="home.series" :priority="!home.movies.length" />
     </template>
   </div>
 </template>
@@ -77,7 +67,10 @@ const resumable = computed(() => signedIn.value ? resumeItems.value : [])
 .skeleton-row { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: clamp(0.8rem, 1.4vw, 1.2rem); }
 @media (max-width: 68rem) { .skeleton-row { grid-template-columns: repeat(5, minmax(0, 1fr)); } }
 @media (max-width: 48rem) { .skeleton-row { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
-@media (max-width: 34rem) { .skeleton-row { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 34rem) {
+  .skeleton-row { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .skeleton--card:nth-child(n + 5) { display: none; }
+}
 .rails-loading { display: grid; gap: 2rem; padding-inline: var(--shell-pad); }
 .rail-skeleton { display: grid; gap: 0.8rem; }
 .load-error { display: grid; justify-items: start; gap: 1rem; padding-block: 3rem; color: var(--text-secondary); }

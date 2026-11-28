@@ -6,9 +6,8 @@ import MovieArt from './MovieArt.vue'
 // scaling it never pushes neighbouring cards around.
 withDefaults(defineProps<{
   item: LibraryCard
-  wide?: boolean
   priority?: boolean
-}>(), { wide: false, priority: false })
+}>(), { priority: false })
 </script>
 
 <template>
@@ -71,7 +70,6 @@ withDefaults(defineProps<{
   transition: transform var(--dur) var(--ease), box-shadow var(--dur) var(--ease);
 }
 .card-frame > :deep(.art) { block-size: 100%; aspect-ratio: auto; }
-.card-frame > :deep(.art--wide) { aspect-ratio: 16 / 9; }
 .card-overlay {
   position: absolute;
   inset: 0;

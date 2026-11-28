@@ -1,34 +1,26 @@
-// Touch playback rules:
-//  1. Tapping the picture no longer pauses; only the transport button does.
-//  2. Swiping previews the seek and applies it on release, showing the pending
-//     position in the bottom-left corner.
-//  3. A paused picture shows a pause mark in the middle.
-//  4. The next-episode button lives on the left of the transport, not the right.
-//  5. Side seeking needs a double tap; a single tap only reveals the controls.
 import assert from 'node:assert/strict'
 import { mkdir } from 'node:fs/promises'
 import { test } from 'node:test'
 import { chromium } from 'playwright-core'
 import { runtimeFixture } from './helpers/runtime.mjs'
 
-async function touchDrag(cdp, box, fromX, toX, y, steps = 6) {
-  await cdp.send('Input.dispatchMouseEvent', { type: 'mousePressed', x: fromX, y, button: 'left', clickCount: 1, buttons: 1, pointerType: 'touch' })
-  for (let step = 1; step <= steps; step++) {
-    const x = fromX + ((toX - fromX) * step) / steps
-    await cdp.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x, y, button: 'left', buttons: 1, pointerType: 'touch' })
-    await new Promise(resolve => setTimeout(resolve, 16))
-  }
-  const samples = []
-  return { samples, finish: async () => {
-    await cdp.send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: toX, y, button: 'left', clickCount: 1, buttons: 0, pointerType: 'touch' })
-  }, box }
+const control = id => `[data-test="${id}"]`
+
+function waitForTransport(page, visible) {
+  return page.waitForFunction(expected => {
+    const bar = document.querySelector('.watch-transport')
+    if (!bar) return false
+    const style = getComputedStyle(bar)
+    const visible = style.display !== 'none' && style.visibility === 'visible' && Number(style.opacity) > 0.9
+    const hidden = style.display === 'none' || style.visibility === 'hidden' || Number(style.opacity) < 0.1
+    return expected ? visible : hidden
+  }, visible, { timeout: 10_000 })
 }
 
-test('touch playback: tap does not pause, swipe previews, pause mark, next on the left', { timeout: 240_000 }, async (t) => {
+test('Edge touch: tap reveals controls, double tap seeks, swipe previews, and fullscreen keeps the custom player', { timeout: 240_000 }, async t => {
   await mkdir('.test-artifacts', { recursive: true })
   const fx = await runtimeFixture(t, { interval: 0, stable: 100 })
   const browser = await chromium.launch({ channel: 'msedge' })
-  const report = []
   try {
     await fx.login()
     for (let i = 1; i <= 2; i++) await fx.stage(`触屏规则 第${i}集.mp4`)
@@ -42,93 +34,95 @@ test('touch playback: tap does not pause, swipe previews, pause mark, next on th
     })
     const page = await phone.newPage()
     await page.goto(`${fx.base}/watch/${series.id}?episode=${first.id}`, { waitUntil: 'networkidle' })
-    await page.locator('video').waitFor()
+    const video = page.locator('video')
     await page.waitForFunction(() => document.querySelector('video')?.readyState >= 1, null, { timeout: 20_000 })
-    await page.locator('[data-test="touch-play"]').tap()
-    await page.waitForFunction(() => !document.querySelector('video').paused, null, { timeout: 10_000 })
+    const stage = page.locator('.watch-stage')
+    const box = await stage.boundingBox()
+    assert.ok(box, 'the stage is visible')
+    const x = ratio => box.x + box.width * ratio
+    const y = box.y + box.height * 0.45
+    const play = stage.locator(control('player-play'))
+    await play.tap()
+    await page.waitForFunction(() => !document.querySelector('video').paused)
+    await waitForTransport(page, false)
 
-    const stage = await page.locator('.watch-stage').boundingBox()
-    const midX = stage.x + stage.width / 2
-    const midY = stage.y + stage.height * 0.45
+    // A lone tap on a side zone brings back the transport without pausing or seeking.
+    const beforeSingle = await video.evaluate(node => node.currentTime)
+    await page.touchscreen.tap(x(0.85), y)
+    await waitForTransport(page, true)
+    const afterSingle = await video.evaluate(node => ({ paused: node.paused, time: node.currentTime }))
+    assert.equal(afterSingle.paused, false, 'a touch on the picture does not pause playback')
+    assert.ok(Math.abs(afterSingle.time - beforeSingle) < 3, 'one tap on a side zone does not seek')
+    assert.equal(await stage.locator('.watch-seek').filter({ hasText: '快进' }).count(), 0)
 
-    // 1. Tapping the middle must not pause.
-    await page.touchscreen.tap(midX, midY)
-    await page.waitForTimeout(400)
-    const stillPlaying = await page.evaluate(() => !document.querySelector('video').paused)
-    report.push(`tap middle keeps playing: ${stillPlaying}`)
-    assert.equal(stillPlaying, true, 'a tap must not pause playback')
+    await waitForTransport(page, false)
+    const beforeDouble = await video.evaluate(node => node.currentTime)
+    const bar = stage.locator('.watch-transport')
+    await page.touchscreen.tap(x(0.85), y)
+    assert.ok(await bar.evaluate(node => node.classList.contains('is-hidden')), 'the first tap of a possible double tap does not wake the bar')
+    await page.touchscreen.tap(x(0.85), y)
+    const forward = stage.locator('.watch-seek').filter({ hasText: /快进\s*5\s*秒/ })
+    await forward.locator('svg').waitFor({ timeout: 5000 })
+    assert.ok(await bar.evaluate(node => node.classList.contains('is-hidden')), 'double tap seeks without revealing the transport')
+    const afterDouble = await video.evaluate(node => node.currentTime)
+    assert.ok(afterDouble - beforeDouble >= 4.8 && afterDouble - beforeDouble <= 6.5,
+      `double tap advances five seconds (${beforeDouble.toFixed(2)} -> ${afterDouble.toFixed(2)})`)
 
-    // 5. A single tap on a side zone must not seek; a double tap must.
-    const beforeSingle = await page.evaluate(() => document.querySelector('video').currentTime)
-    await page.touchscreen.tap(stage.x + stage.width * 0.85, midY)
-    await page.waitForTimeout(500)
-    const afterSingle = await page.evaluate(() => document.querySelector('video').currentTime)
-    report.push(`single right tap: ${beforeSingle.toFixed(1)} -> ${afterSingle.toFixed(1)}`)
-    assert.ok(Math.abs(afterSingle - beforeSingle) < 3, 'one tap on a side must not seek')
+    // On touch, Next stays next to play in the left group underneath the track.
+    const next = stage.locator(`.watch-transport-row ${control('episode-next')}`)
+    const [nextBox, playBox, trackBox] = await Promise.all([
+      next.boundingBox(), play.boundingBox(), stage.locator(control('player-track')).boundingBox(),
+    ])
+    assert.ok(nextBox && playBox && trackBox, 'transport controls are present')
+    assert.ok(nextBox.x >= playBox.x + playBox.width - 1 && nextBox.x + nextBox.width <= x(0.5), 'Next sits after play in the left group')
+    assert.ok(nextBox.y >= trackBox.y + trackBox.height - 1, 'Next is below the progress track')
 
-    await page.touchscreen.tap(stage.x + stage.width * 0.85, midY)
-    await page.touchscreen.tap(stage.x + stage.width * 0.85, midY)
-    await page.waitForTimeout(500)
-    const afterDouble = await page.evaluate(() => document.querySelector('video').currentTime)
-    report.push(`double right tap: ${afterSingle.toFixed(1)} -> ${afterDouble.toFixed(1)}`)
-    assert.ok(afterDouble - afterSingle >= 4, 'a double tap on the right seeks forward by 5s')
-
-    // 4. The next-episode button sits on the left side of the transport.
-    const nextBox = await page.locator('[data-test="touch-next"]').boundingBox()
-    const playBox = await page.locator('[data-test="touch-play"]').boundingBox()
-    const trackBox = await page.locator('[data-test="touch-track"]').boundingBox()
-    report.push(`next x=${Math.round(nextBox.x)} play x=${Math.round(playBox.x)} track x=${Math.round(trackBox.x)}`)
-    assert.ok(nextBox.x < trackBox.x, 'the next button is left of the scrubber')
-    assert.ok(nextBox.x < stage.x + stage.width * 0.5, 'the next button is on the left half')
-    // 2. Swiping shows a pending position in the bottom-left and commits on release.
+    // Send a genuine horizontal touch gesture and keep the finger down while checking the preview.
     const cdp = await phone.newCDPSession(page)
-    const y = stage.y + stage.height * 0.45
-    const startTime = await page.evaluate(() => document.querySelector('video').currentTime)
-    await cdp.send('Input.dispatchMouseEvent', { type: 'mousePressed', x: stage.x + stage.width * 0.35, y, button: 'left', clickCount: 1, buttons: 1, pointerType: 'touch' })
-    for (const ratio of [0.45, 0.55, 0.65, 0.75]) {
-      await cdp.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: stage.x + stage.width * ratio, y, button: 'left', buttons: 1, pointerType: 'touch' })
-      await page.waitForTimeout(20)
+    const startTime = await video.evaluate(node => node.currentTime)
+    await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x: x(0.25), y }] })
+    for (const ratio of [0.35, 0.45, 0.55, 0.65, 0.75]) {
+      await cdp.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [{ x: x(ratio), y }] })
     }
-    const preview = await page.locator('[data-test="scrub-preview"]')
+    const preview = stage.locator(control('scrub-preview'))
     await preview.waitFor({ timeout: 5000 })
+    assert.ok(await bar.evaluate(node => node.classList.contains('is-hidden')), 'swiping previews without revealing the transport')
     const previewBox = await preview.boundingBox()
-    const previewText = (await preview.innerText()).replace(/\s+/g, ' ').trim()
-    report.push(`preview: "${previewText}" at x=${Math.round(previewBox.x)}`)
-    assert.ok(previewBox.x < stage.x + stage.width * 0.5, 'the pending position is in the left half')
-    // It must sit inside the picture and clear of the transport bar along the bottom.
-    assert.ok(previewBox.y >= stage.y, 'the preview stays inside the picture')
-    assert.ok(previewBox.y + previewBox.height <= stage.y + stage.height - 40, 'the preview clears the transport bar')
-    assert.match(previewText, /\+\d+ 秒|−\d+ 秒/, 'the preview shows the delta')
-    // The video must not have jumped yet, so playback stays smooth.
-    const duringSwipe = await page.evaluate(() => document.querySelector('video').currentTime)
-    report.push(`during swipe: ${duringSwipe.toFixed(1)} (started ${startTime.toFixed(1)})`)
-    assert.ok(Math.abs(duringSwipe - startTime) < 12, 'the seek is not committed mid-swipe')
+    assert.ok(previewBox && previewBox.x < x(0.5) && previewBox.y >= box.y, 'the pending position appears inside the left half')
+    assert.ok(previewBox.y + previewBox.height <= trackBox.y + 1, 'the preview clears the transport')
+    assert.match((await preview.innerText()).replace(/\s+/g, ' '), /\+\d+ 秒/, 'the preview shows a forward delta')
+    const duringSwipe = await video.evaluate(node => node.currentTime)
+    assert.ok(Math.abs(duringSwipe - startTime) < 5, 'the seek is not committed while swiping')
     await page.screenshot({ path: '.test-artifacts/touch-swipe-preview.png' })
 
-    await cdp.send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: stage.x + stage.width * 0.75, y, button: 'left', clickCount: 1, buttons: 0, pointerType: 'touch' })
-    await page.waitForTimeout(600)
-    const afterSwipe = await page.evaluate(() => document.querySelector('video').currentTime)
-    report.push(`after release: ${afterSwipe.toFixed(1)}`)
-    assert.ok(afterSwipe > startTime + 8, 'releasing the swipe commits the seek')
-    assert.equal(await page.locator('[data-test="scrub-preview"]').count(), 0, 'the preview disappears')
+    const beforeRelease = await video.evaluate(node => node.currentTime)
+    await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] })
+    await preview.waitFor({ state: 'hidden' })
+    const afterSwipe = await video.evaluate(node => node.currentTime)
+    assert.ok(afterSwipe - beforeRelease >= 8 && afterSwipe - beforeRelease <= 13, 'releasing the swipe commits its seek')
+    assert.ok(await bar.evaluate(node => node.classList.contains('is-hidden')), 'releasing the swipe keeps the transport hidden')
     await cdp.detach()
 
-    // 3. Pausing (via the button only) shows a mark in the middle.
-    await page.locator('[data-test="touch-play"]').tap()
-    await page.waitForFunction(() => document.querySelector('video').paused, null, { timeout: 10_000 })
-    await page.waitForTimeout(400)
-    const mark = await page.locator('[data-test="paused-mark"]').boundingBox()
-    report.push(`paused mark: ${JSON.stringify(mark ? { x: Math.round(mark.x), y: Math.round(mark.y) } : null)}`)
-    assert.ok(mark, 'a paused picture shows a pause mark')
-    const markCentreX = mark.x + mark.width / 2
-    const markCentreY = mark.y + mark.height / 2
-    assert.ok(Math.abs(markCentreX - (stage.x + stage.width / 2)) < 40, 'the mark is centred horizontally')
-    assert.ok(Math.abs(markCentreY - (stage.y + stage.height / 2)) < 40, 'the mark is centred vertically')
+    await page.touchscreen.tap(x(0.5), y)
+    await waitForTransport(page, true)
+    await play.tap()
+    await page.waitForFunction(() => document.querySelector('video').paused)
+    const mark = stage.locator(`.watch-paused-mark${control('paused-mark')}`)
+    await mark.locator('svg').waitFor()
+    const markBox = await mark.boundingBox()
+    assert.ok(markBox && Math.abs(markBox.x + markBox.width / 2 - x(0.5)) < 20
+      && Math.abs(markBox.y + markBox.height / 2 - (box.y + box.height / 2)) < 20, 'the touch play overlay is centred')
     await page.screenshot({ path: '.test-artifacts/touch-paused.png' })
 
+    const fullscreen = stage.locator(`.watch-transport ${control('player-fullscreen')}`)
+    await fullscreen.tap()
+    await page.waitForFunction(() => document.fullscreenElement === document.querySelector('.watch-stage'))
+    await waitForTransport(page, true)
+    assert.ok(await mark.isVisible(), 'the paused overlay remains visible in fullscreen')
+    await fullscreen.tap()
+    await page.waitForFunction(() => document.fullscreenElement === null)
     await phone.close()
   } finally {
-    console.log(report.join('\n'))
     await browser.close()
   }
 })
