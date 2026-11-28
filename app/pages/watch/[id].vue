@@ -1,4 +1,4 @@
-<script setup lang="ts">
+﻿<script setup lang="ts">
 import type { LibraryCard, TitleDetail } from '#shared/types/library'
 import EpisodeList from '~/components/public/EpisodeList.vue'
 import MovieCard from '~/components/public/MovieCard.vue'
@@ -244,7 +244,7 @@ function reloadVideo() {
   player.value.focus()
 }
 
-const seekStep = 3
+const seekStep = 5
 const seekNotice = ref('')
 let noticeTimer: ReturnType<typeof setTimeout> | undefined
 
@@ -340,7 +340,9 @@ function onScrubEnd(event: PointerEvent) {
 // previews while the finger moves and applies the seek once it lifts: writing
 // `currentTime` on every move makes the decoder thrash and the picture stutter.
 const TAP_ZONE = 0.3
-const SWIPE_STEP = 10
+// A double tap on either side, and the arrow keys, step by the same amount.
+const SWIPE_STEP = 5
+const SWIPE_SPAN = 20
 const DOUBLE_TAP_MS = 280
 // The zone hint appears once per visit so the gesture is discoverable.
 const seekHintShown = ref(false)
@@ -430,7 +432,7 @@ function onStagePointerMove(event: PointerEvent) {
   // overlay shows the landing point and the video keeps playing smoothly.
   const rect = stageRect()
   if (!rect?.width) return
-  swipeOffset.value = ((event.clientX - swipe.startX) / rect.width) * SWIPE_STEP * 4
+  swipeOffset.value = ((event.clientX - swipe.startX) / rect.width) * SWIPE_SPAN
 }
 
 function onStagePointerUp(event: PointerEvent) {
@@ -717,32 +719,6 @@ watch(videoKey, () => {
             <span class="watch-transport-clock">{{ clockTime(duration) }}</span>
           </div>
 
-          <!-- Episode stepping sits in the bottom-left corner of the picture, where
-               the native bar keeps its own transport controls. -->
-          <div v-if="!touchUi && (nextEpisode || previousEpisode)" class="watch-episode-nav" data-test="episode-nav">
-            <button
-              v-if="previousEpisode"
-              class="watch-episode-nav-button"
-              type="button"
-              :aria-label="`上一集：第 ${previousEpisode.season} 季第 ${previousEpisode.episode} 集`"
-              data-test="episode-prev"
-              @click="watchEpisode(previousEpisode)"
-            >
-              <PublicIcon name="next" class="watch-episode-nav-back" />
-            </button>
-            <button
-              v-if="nextEpisode"
-              class="watch-episode-nav-button"
-              type="button"
-              :aria-label="`下一集：第 ${nextEpisode.season} 季第 ${nextEpisode.episode} 集`"
-              data-test="episode-next"
-              @click="watchEpisode(nextEpisode)"
-            >
-              <PublicIcon name="next" />
-            </button>
-            <span class="watch-episode-nav-label">{{ nextEpisode ? '下一集' : '上一集' }}</span>
-          </div>
-
           <!-- While a swipe is being read, the pending position shows in the bottom-left
                corner so the viewer can see where the seek will land. -->
           <div v-if="swipePreviewing" class="watch-scrub-preview" aria-hidden="true" data-test="scrub-preview">
@@ -751,9 +727,8 @@ watch(videoKey, () => {
             <span class="watch-scrub-preview-delta">{{ swipeOffset >= 0 ? '+' : '−' }}{{ Math.abs(Math.round(swipeOffset)) }} 秒</span>
           </div>
 
-          <!-- A paused picture says so with a mark in the middle, which is also how a
-               viewer knows a tap will not resume it. -->
-          <div v-if="touchUi && sourceUrl && !playing && !swipePreviewing" class="watch-paused-mark" aria-hidden="true" data-test="paused-mark">
+          <!-- A paused picture says so in the middle, on every device. -->
+          <div v-if="sourceUrl && !playing && !swipePreviewing" class="watch-paused-mark" aria-hidden="true" data-test="paused-mark">
             <PublicIcon name="pause" />
           </div>
 
@@ -828,6 +803,30 @@ watch(videoKey, () => {
           </div>
           <div class="watch-actions">
             <button v-if="playbackError" type="button" class="btn watch-action" @click="reloadVideo">重新载入</button>
+            <!-- Episode stepping belongs with the other controls rather than floating
+                 over the picture. Icon only: the tooltip names the episode. -->
+            <button
+              v-if="previousEpisode"
+              type="button"
+              class="btn watch-action watch-step"
+              :title="`上一集：第 ${previousEpisode.season} 季第 ${previousEpisode.episode} 集`"
+              :aria-label="`上一集：第 ${previousEpisode.season} 季第 ${previousEpisode.episode} 集`"
+              data-test="episode-prev"
+              @click="watchEpisode(previousEpisode)"
+            >
+              <PublicIcon name="next" class="watch-step-back" />
+            </button>
+            <button
+              v-if="nextEpisode"
+              type="button"
+              class="btn watch-action watch-step"
+              :title="`下一集：第 ${nextEpisode.season} 季第 ${nextEpisode.episode} 集`"
+              :aria-label="`下一集：第 ${nextEpisode.season} 季第 ${nextEpisode.episode} 集`"
+              data-test="episode-next"
+              @click="watchEpisode(nextEpisode)"
+            >
+              <PublicIcon name="next" />
+            </button>
             <label class="watch-speed">
               <span class="visually-hidden">播放速度</span>
               <select
@@ -1095,41 +1094,11 @@ watch(videoKey, () => {
 }
 .watch-paused-mark :deep(svg) { inline-size: 1.6rem; block-size: 1.6rem; }
 
-/* Episode stepping in the bottom-left corner of the picture. It floats above the
-   native control bar, which keeps its own transport on the same edge. */
-.watch-episode-nav {
-  position: absolute;
-  z-index: 4;
-  inset-block-end: 4.4rem;
-  inset-inline-start: 0.9rem;
-  display: flex;
-  align-items: center;
-  gap: 0.45rem;
-}
-.watch-episode-nav-button {
-  display: grid;
-  place-items: center;
-  inline-size: 2.3rem;
-  block-size: 2.3rem;
-  border: 1px solid rgb(255 255 255 / 0.18);
-  border-radius: 50%;
-  background: rgb(0 0 0 / 0.7);
-  color: #fff;
-  backdrop-filter: blur(6px);
-  transition: background var(--dur-fast) var(--ease), border-color var(--dur-fast) var(--ease);
-}
-.watch-episode-nav-button:hover { border-color: rgb(255 255 255 / 0.45); background: rgb(0 0 0 / 0.88); }
-.watch-episode-nav-button :deep(svg) { inline-size: 1.05rem; block-size: 1.05rem; }
-.watch-episode-nav-back { transform: rotate(180deg); }
-.watch-episode-nav-label {
-  padding: 0.2rem 0.5rem;
-  border-radius: var(--radius-pill);
-  background: rgb(0 0 0 / 0.6);
-  color: rgb(255 255 255 / 0.9);
-  font-size: 0.76rem;
-  white-space: nowrap;
-  backdrop-filter: blur(6px);
-}
+/* Episode stepping sits in the action bar with the other controls; the icon carries
+   the meaning and the title tooltip names the exact episode. */
+.watch-step { min-block-size: 42px; inline-size: 42px; padding-inline: 0; }
+.watch-step :deep(svg) { inline-size: 1.05rem; block-size: 1.05rem; }
+.watch-step-back { transform: rotate(180deg); }
 
 /* The title card sits in the top-left corner of the picture for a few seconds after
    the video loads, then fades so nothing remains over the film. */

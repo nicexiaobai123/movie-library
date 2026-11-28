@@ -71,7 +71,7 @@ test('touch playback: tap does not pause, swipe previews, pause mark, next on th
     await page.waitForTimeout(500)
     const afterDouble = await page.evaluate(() => document.querySelector('video').currentTime)
     report.push(`double right tap: ${afterSingle.toFixed(1)} -> ${afterDouble.toFixed(1)}`)
-    assert.ok(afterDouble - afterSingle >= 8, 'a double tap on the right seeks forward')
+    assert.ok(afterDouble - afterSingle >= 4, 'a double tap on the right seeks forward by 5s')
 
     // 4. The next-episode button sits on the left side of the transport.
     const nextBox = await page.locator('[data-test="touch-next"]').boundingBox()
@@ -80,7 +80,6 @@ test('touch playback: tap does not pause, swipe previews, pause mark, next on th
     report.push(`next x=${Math.round(nextBox.x)} play x=${Math.round(playBox.x)} track x=${Math.round(trackBox.x)}`)
     assert.ok(nextBox.x < trackBox.x, 'the next button is left of the scrubber')
     assert.ok(nextBox.x < stage.x + stage.width * 0.5, 'the next button is on the left half')
-
     // 2. Swiping shows a pending position in the bottom-left and commits on release.
     const cdp = await phone.newCDPSession(page)
     const y = stage.y + stage.height * 0.45

@@ -72,11 +72,11 @@ async function assertSeek(page, url, sourcePath, base) {
     }, target, { timeout: 20_000 })
     console.log(`Edge seek: ${before.buffered.toFixed(2)}s buffered before seeking to ${target}s; ${response.status()} ${response.headers()['content-range']}`)
 
-    // Arrow keys are handled only while the player can act.
+    // Arrow keys are handled only while the player can act; the step is five seconds.
     await page.keyboard.press('ArrowRight')
     await page.waitForFunction(time => {
       const media = document.querySelector('video')
-      return media && !media.seeking && Math.abs(media.currentTime - (time + 3)) < 1
+      return media && !media.seeking && Math.abs(media.currentTime - (time + 5)) < 1
     }, target, { timeout: 10_000 })
     await page.keyboard.press('ArrowLeft')
     await page.waitForFunction(time => {

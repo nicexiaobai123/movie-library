@@ -1,4 +1,4 @@
-﻿// Two player fixes:
+// Two player fixes:
 //  1. Touch devices must not show the native control bar, whose scrubber knob and
 //     double-tap ripple draw a white dot over the middle of the picture.
 //  2. The desktop seek message belongs in the bottom-right corner, never mid-picture.
@@ -92,7 +92,7 @@ test('touch playback uses our transport, and the desktop notice sits bottom-righ
       }
     })
     report.push(`desktop notice: ${JSON.stringify(notice)}`)
-    assert.match(notice.text, /快进 3 秒/)
+    assert.match(notice.text, /快进 5 秒/)
     // The critical property: it is nowhere near the middle of the picture.
     const dx = Math.abs(notice.centreX - notice.stageCentreX)
     const dy = Math.abs(notice.centreY - notice.stageCentreY)

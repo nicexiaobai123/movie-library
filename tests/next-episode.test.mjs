@@ -30,13 +30,15 @@ test('the next episode is reachable from the player and plays itself', { timeout
     await page.locator('video').waitFor()
     await page.waitForFunction(() => document.querySelector('video')?.readyState >= 1, null, { timeout: 20_000 })
 
-    // The control is in the picture's bottom-left corner.
-    const nav = await page.locator('[data-test="episode-nav"]').boundingBox()
-    const stage = await page.locator('.watch-stage').boundingBox()
-    report.push(`nav box: ${JSON.stringify(nav ? { x: Math.round(nav.x), y: Math.round(nav.y) } : null)}`)
-    assert.ok(nav, 'the episode navigation is present')
-    assert.ok(nav.x - stage.x < 120, 'it hugs the left edge')
-    assert.ok(stage.y + stage.height - (nav.y + nav.height) < 120, 'it sits near the bottom')
+    // The buttons live in the action bar under the picture, not over it.
+    const actions = await page.locator('.watch-actions').boundingBox()
+    const nextBox = await page.locator('[data-test="episode-next"]').boundingBox()
+    report.push(`next button: ${JSON.stringify(nextBox && { x: Math.round(nextBox.x), y: Math.round(nextBox.y) })}`)
+    assert.ok(nextBox, 'the next-episode button is present')
+    assert.ok(nextBox.y >= actions.y - 2 && nextBox.y + nextBox.height <= actions.y + actions.height + 2,
+      'the button sits inside the action bar')
+    // Its name is a tooltip rather than visible text.
+    assert.match(await page.locator('[data-test="episode-next"]').getAttribute('title') ?? '', /下一集/)
     await page.screenshot({ path: '.test-artifacts/episode-nav.png' })
 
     // Clicking it moves to the second episode; the first episode has no "previous".
