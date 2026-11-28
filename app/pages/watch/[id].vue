@@ -212,6 +212,16 @@ function revealControls() {
   }, 2600)
 }
 
+// Teach the seek zones the first time playback starts on a touch device.
+function showZoneHintOnce() {
+  if (seekHintShown.value || hintTimer !== undefined) return
+  seekHintShown.value = true
+  hintTimer = setTimeout(() => {
+    hintTimer = undefined
+    seekHintShown.value = false
+  }, 3000)
+}
+
 function togglePlay() {
   const element = player.value
   if (!element) return
@@ -258,6 +268,83 @@ function onScrubEnd(event: PointerEvent) {
   seekTo(target)
   revealControls()
   ;(event.currentTarget as HTMLElement).releasePointerCapture?.(event.pointerId)
+}
+
+// Touch seeking has to work without the native bar. Two gestures cover it, the way
+// mobile players do it: tapping the left or right third of the picture steps back or
+// forward, and swiping sideways scrubs continuously.
+const TAP_ZONE = 0.3
+const SWIPE_STEP = 10
+// The zone hint appears once per visit so the tap targets are discoverable.
+const seekHintShown = ref(false)
+let hintTimer: ReturnType<typeof setTimeout> | undefined
+const swipe = { active: false, startX: 0, startY: 0, base: 0, moved: false, pointerId: -1 }
+let swipeTimer: ReturnType<typeof setTimeout> | undefined
+
+function stageRect(): DOMRect | null {
+  return stage.value?.getBoundingClientRect() ?? null
+}
+
+function onStagePointerDown(event: PointerEvent) {
+  // Only a finger on the picture itself; our transport bar handles its own taps.
+  if (!touchUi.value || !playerReady()) return
+  if ((event.target as HTMLElement).closest('.watch-transport, .watch-overlay, button, a')) return
+  swipe.active = true
+  swipe.pointerId = event.pointerId
+  swipe.startX = event.clientX
+  swipe.startY = event.clientY
+  swipe.base = player.value?.currentTime ?? 0
+  swipe.moved = false
+}
+
+function onStagePointerMove(event: PointerEvent) {
+  if (!swipe.active || event.pointerId !== swipe.pointerId) return
+  const dx = event.clientX - swipe.startX
+  const dy = event.clientY - swipe.startY
+  // A mostly-vertical drag is page scrolling, not scrubbing; give it back.
+  if (!swipe.moved) {
+    if (Math.abs(dy) > Math.abs(dx) && Math.abs(dy) > 12) {
+      swipe.active = false
+      return
+    }
+    if (Math.abs(dx) < 12) return
+    swipe.moved = true
+    // Capture only once this is clearly a horizontal scrub.
+    ;(event.currentTarget as HTMLElement).setPointerCapture?.(event.pointerId)
+  }
+  // A full swipe across the picture covers a fixed span, which keeps the gesture
+  // predictable regardless of the film's length.
+  const rect = stageRect()
+  if (!rect?.width) return
+  const span = event.clientX - swipe.startX
+  const delta = (span / rect.width) * SWIPE_STEP * 4
+  seekTo(swipe.base + delta)
+  if (swipeTimer !== undefined) clearTimeout(swipeTimer)
+  swipeTimer = setTimeout(() => { swipeTimer = undefined }, 120)
+}
+
+function onStagePointerUp(event: PointerEvent) {
+  if (!swipe.active || event.pointerId !== swipe.pointerId) return
+  swipe.active = false
+  ;(event.currentTarget as HTMLElement).releasePointerCapture?.(event.pointerId)
+  const element = player.value
+  if (!element) return
+  if (swipe.moved) {
+    // The scrub already moved playback; the bar's clock shows where it landed.
+    revealControls()
+    return
+  }
+  // A tap: the outer thirds step, the middle toggles playback.
+  const rect = stageRect()
+  if (!rect?.width) return
+  const ratio = (event.clientX - rect.left) / rect.width
+  if (ratio <= TAP_ZONE) {
+    if (seekBy(-SWIPE_STEP)) revealControls()
+  } else if (ratio >= 1 - TAP_ZONE) {
+    if (seekBy(SWIPE_STEP)) revealControls()
+  } else {
+    togglePlay()
+  }
 }
 
 function clockTime(seconds: number) {
@@ -361,6 +448,8 @@ onBeforeUnmount(() => {
   if (noticeTimer !== undefined) clearTimeout(noticeTimer)
   if (reportTimer !== undefined) clearTimeout(reportTimer)
   if (hideTimer !== undefined) clearTimeout(hideTimer)
+  if (hintTimer !== undefined) clearTimeout(hintTimer)
+  if (swipeTimer !== undefined) clearTimeout(swipeTimer)
 })
 
 function flushProgress() {
@@ -421,7 +510,15 @@ watch(videoKey, () => {
       </header>
 
       <section v-if="sourceUrl" class="watch-player" aria-label="视频播放">
-        <div ref="stage" class="watch-stage" :class="{ 'is-fullscreen': isFullscreen, 'is-fill': fillScreen, 'is-tab-focus': tabFocus, 'is-touch': touchUi }">
+        <div
+          ref="stage"
+          class="watch-stage"
+          :class="{ 'is-fullscreen': isFullscreen, 'is-fill': fillScreen, 'is-tab-focus': tabFocus, 'is-touch': touchUi }"
+          @pointerdown="onStagePointerDown"
+          @pointermove="onStagePointerMove"
+          @pointerup="onStagePointerUp"
+          @pointercancel="onStagePointerUp"
+        >
           <video
             :key="videoKey"
             ref="player"
@@ -435,7 +532,7 @@ watch(videoKey, () => {
             @loadedmetadata="playbackError = ''; applyResumePoint(); applyPlaybackRate(); syncTransport()"
             @timeupdate="scheduleReport(); syncTransport()"
             @durationchange="syncTransport()"
-            @play="syncTransport(); revealControls()"
+            @play="syncTransport(); revealControls(); showZoneHintOnce()"
             @pause="reportProgress(true); syncTransport(); revealControls()"
             @ended="reportProgress(true); syncTransport(); revealControls()"
             @dblclick="touchUi ? undefined : toggleFullscreen()"
@@ -450,8 +547,7 @@ watch(videoKey, () => {
             class="watch-transport"
             :class="{ 'is-hidden': !controlsShown }"
             @click.self="controlsShown = playing ? false : true"
-          >
-            <button
+          >            <button
               class="watch-transport-button"
               type="button"
               :aria-label="playing ? '暂停' : '播放'"
@@ -481,6 +577,19 @@ watch(videoKey, () => {
               <span class="watch-transport-fill" :style="{ inlineSize: `${duration ? (progress / duration) * 100 : 0}%` }" />
             </div>
             <span class="watch-transport-clock">{{ clockTime(duration) }}</span>
+          </div>
+
+          <!-- Touch hint: the left and right thirds of the picture are seek zones.
+               Shown briefly when playback starts so the gesture is discoverable. -->
+          <div v-if="touchUi && sourceUrl && seekHintShown" class="watch-zone-hint" aria-hidden="true">
+            <span class="watch-zone-hint-side">
+              <PublicIcon name="back" />
+              <span>后退 {{ SWIPE_STEP }} 秒</span>
+            </span>
+            <span class="watch-zone-hint-side">
+              <span>前进 {{ SWIPE_STEP }} 秒</span>
+              <PublicIcon name="back" class="watch-zone-hint-flip" />
+            </span>
           </div>
 
           <p v-if="seekNotice" class="watch-seek" aria-hidden="true">{{ seekNotice }}</p>
@@ -644,6 +753,9 @@ watch(videoKey, () => {
   background: #000;
   object-fit: contain;
 }
+/* Our own gestures replace the native bar on touch; horizontal drags must not be
+   claimed by the page scroller. */
+.watch-stage.is-touch { touch-action: pan-y; }
 .watch-stage.is-fullscreen video,
 .watch-stage:fullscreen video { inline-size: 100%; block-size: 100%; max-block-size: none; }
 .watch-stage.is-fullscreen.is-fill video { object-fit: cover; }
@@ -713,6 +825,38 @@ watch(videoKey, () => {
 }
 .watch-transport-track:focus-visible { outline: 2px solid var(--accent-strong); outline-offset: 3px; border-radius: var(--radius-xs); }
 
+
+/* The left/right thirds are seek zones on touch; this hint names them once, briefly,
+   just above the transport bar so it does not cover the picture itself. */
+.watch-zone-hint {
+  position: absolute;
+  z-index: 3;
+  inset-inline: 0;
+  inset-block-end: 3.9rem;
+  display: flex;
+  justify-content: space-between;
+  padding-inline: 0.7rem;
+  pointer-events: none;
+  animation: watch-zone-fade 3s var(--ease) forwards;
+}
+@keyframes watch-zone-fade {
+  0%, 70% { opacity: 1; }
+  100% { opacity: 0; }
+}
+.watch-zone-hint-side {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.4rem 0.7rem;
+  border-radius: var(--radius-pill);
+  background: rgb(0 0 0 / 0.55);
+  color: rgb(255 255 255 / 0.9);
+  font-size: 0.76rem;
+  white-space: nowrap;
+  backdrop-filter: blur(4px);
+}
+.watch-zone-hint-side :deep(svg) { inline-size: 0.9rem; block-size: 0.9rem; }
+.watch-zone-hint-flip { transform: rotate(180deg); }
 
 /* Feedback sits in the bottom-right corner rather than mid-picture, so a seek or
    resume message never covers the part of the frame being watched. The native

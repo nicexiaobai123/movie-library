@@ -59,6 +59,49 @@ test('touch playback uses our transport, and the desktop notice sits bottom-righ
     assert.ok(seeked > 15, 'tapping the middle of the scrubber seeks forward')
     await page.screenshot({ path: '.test-artifacts/transport-phone-seeked.png' })
 
+    // Tapping the right third steps forward 10s; the left third steps back.
+    const stageBox = await page.locator('.watch-stage').boundingBox()
+    const time = () => page.evaluate(() => Number(document.querySelector('video').currentTime.toFixed(1)))
+    const rightTap = { x: stageBox.x + stageBox.width * 0.85, y: stageBox.y + stageBox.height * 0.5 }
+    const beforeRight = await time()
+    await page.touchscreen.tap(rightTap.x, rightTap.y)
+    await page.waitForFunction(base => document.querySelector('video').currentTime > base + 8, beforeRight, { timeout: 5_000 })
+    const afterRight = await time()
+    report.push(`right tap: ${beforeRight}s -> ${afterRight}s`)
+    assert.ok(afterRight - beforeRight >= 9, 'the right third steps forward about 10s')
+    await page.waitForTimeout(200)
+    assert.match(await page.locator('.watch-seek').innerText(), /快进 10 秒/)
+
+    const leftTap = { x: stageBox.x + stageBox.width * 0.15, y: stageBox.y + stageBox.height * 0.5 }
+    const beforeLeft = await time()
+    await page.touchscreen.tap(leftTap.x, leftTap.y)
+    await page.waitForFunction(base => document.querySelector('video').currentTime < base - 8, beforeLeft, { timeout: 5_000 })
+    const afterLeft = await time()
+    report.push(`left tap: ${beforeLeft}s -> ${afterLeft}s`)
+    assert.ok(beforeLeft - afterLeft >= 9, 'the left third steps back about 10s')
+
+    // A horizontal swipe scrubs continuously; a vertical drag is left to the page.
+    const midY = stageBox.y + stageBox.height * 0.5
+    const beforeSwipe = await time()
+    const cdp = await phone.newCDPSession(page)
+    for (const type of ['mousePressed', 'mouseMoved', 'mouseMoved', 'mouseReleased']) {
+      await cdp.send('Input.dispatchMouseEvent', {
+        type,
+        x: type === 'mousePressed' ? stageBox.x + stageBox.width * 0.4 : stageBox.x + stageBox.width * 0.75,
+        y: midY,
+        button: 'left',
+        clickCount: 1,
+        buttons: type === 'mouseReleased' ? 0 : 1,
+        pointerType: 'touch',
+      })
+    }
+    await page.waitForTimeout(400)
+    const afterSwipe = await time()
+    report.push(`swipe right: ${beforeSwipe}s -> ${afterSwipe}s`)
+    assert.ok(afterSwipe > beforeSwipe + 5, 'swiping right scrubs forward')
+    await page.screenshot({ path: '.test-artifacts/transport-phone-swipe.png' })
+    await cdp.detach()
+
     // --- Desktop: the notice is anchored bottom-right, not centred -----------
     const desktop = await browser.newContext({ viewport: { width: 1440, height: 900 }, locale: 'zh-CN' })
     const desk = await desktop.newPage()
