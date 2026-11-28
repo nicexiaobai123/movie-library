@@ -147,6 +147,7 @@ pnpm test:progress   # 继续观看：保存进度、回到首页续播、看完
 pnpm test:actors     # 演员-片名 命名：片名干净、演员可点、筛选可用
 pnpm test:pager      # 片库分页
 pnpm test:classify   # 批量把选中的文件归为电影或剧集
+pnpm test:player     # 触屏用自建控制条、桌面快进提示在右下角
 pnpm test:cards      # 卡片始终显示片名与「剧集」标签
 pnpm test:pagestyles # 片库、后台各筛选、搜索都共用「电影」页的分页控件
 pnpm backup          # 用 VACUUM INTO 备份数据库到 backups/ 并统计媒体目录

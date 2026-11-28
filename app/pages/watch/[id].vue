@@ -182,6 +182,84 @@ const seekStep = 3
 const seekNotice = ref('')
 let noticeTimer: ReturnType<typeof setTimeout> | undefined
 
+// Touch devices get our own transport bar instead of the native one. The native
+// control bar draws its own scrubber knob and double-tap ripple, which cannot be
+// styled away, and both sit over the middle of the picture.
+const touchUi = ref(false)
+const playing = ref(false)
+const progress = ref(0)
+const duration = ref(0)
+const scrubbing = ref(false)
+const controlsShown = ref(true)
+let hideTimer: ReturnType<typeof setTimeout> | undefined
+
+function syncTransport() {
+  const element = player.value
+  if (!element) return
+  duration.value = Number.isFinite(element.duration) ? element.duration : 0
+  // While dragging, the bar shows the finger position rather than the video's.
+  if (!scrubbing.value) progress.value = element.currentTime
+  playing.value = !element.paused && !element.ended
+}
+
+function revealControls() {
+  controlsShown.value = true
+  if (hideTimer !== undefined) clearTimeout(hideTimer)
+  // Controls fade out during playback so they do not sit over the picture.
+  hideTimer = setTimeout(() => {
+    hideTimer = undefined
+    if (playing.value && !scrubbing.value) controlsShown.value = false
+  }, 2600)
+}
+
+function togglePlay() {
+  const element = player.value
+  if (!element) return
+  if (element.paused) void element.play().catch(() => { /* the browser refused; the poster stays */ })
+  else element.pause()
+  revealControls()
+}
+
+function seekTo(seconds: number) {
+  const element = player.value
+  if (!element || !Number.isFinite(seconds)) return
+  const end = Number.isFinite(element.duration) ? element.duration : 0
+  const target = Math.min(Math.max(seconds, 0), Math.max(end - 0.05, 0))
+  element.currentTime = target
+  progress.value = target
+}
+
+// A tap on the scrubber jumps there; a drag follows the finger.
+function scrubFromEvent(event: PointerEvent) {
+  const track = event.currentTarget as HTMLElement
+  const rect = track.getBoundingClientRect()
+  if (!rect.width || !duration.value) return 0
+  const ratio = Math.min(Math.max((event.clientX - rect.left) / rect.width, 0), 1)
+  return ratio * duration.value
+}
+
+function onScrubStart(event: PointerEvent) {
+  if (!duration.value) return
+  scrubbing.value = true
+  revealControls()
+  ;(event.currentTarget as HTMLElement).setPointerCapture?.(event.pointerId)
+  progress.value = scrubFromEvent(event)
+}
+
+function onScrubMove(event: PointerEvent) {
+  if (!scrubbing.value) return
+  progress.value = scrubFromEvent(event)
+}
+
+function onScrubEnd(event: PointerEvent) {
+  if (!scrubbing.value) return
+  const target = scrubFromEvent(event)
+  scrubbing.value = false
+  seekTo(target)
+  revealControls()
+  ;(event.currentTarget as HTMLElement).releasePointerCapture?.(event.pointerId)
+}
+
 function clockTime(seconds: number) {
   const total = Math.max(0, Math.round(seconds))
   const hours = Math.floor(total / 3600)
@@ -269,6 +347,9 @@ onMounted(() => {
   document.addEventListener('fullscreenchange', syncFullscreen)
   // Leaving mid-film should keep the position; `pagehide` fires on tab close too.
   window.addEventListener('pagehide', flushProgress)
+  // A coarse pointer means a finger, where the native bar's knob and double-tap
+  // ripple would cover the picture; those devices get the custom transport.
+  touchUi.value = window.matchMedia?.('(pointer: coarse)').matches ?? false
   playbackRate.value = readStoredRate()
   applyPlaybackRate()
 })
@@ -279,6 +360,7 @@ onBeforeUnmount(() => {
   flushProgress()
   if (noticeTimer !== undefined) clearTimeout(noticeTimer)
   if (reportTimer !== undefined) clearTimeout(reportTimer)
+  if (hideTimer !== undefined) clearTimeout(hideTimer)
 })
 
 function flushProgress() {
@@ -339,25 +421,68 @@ watch(videoKey, () => {
       </header>
 
       <section v-if="sourceUrl" class="watch-player" aria-label="视频播放">
-        <div ref="stage" class="watch-stage" :class="{ 'is-fullscreen': isFullscreen, 'is-fill': fillScreen, 'is-tab-focus': tabFocus }">
+        <div ref="stage" class="watch-stage" :class="{ 'is-fullscreen': isFullscreen, 'is-fill': fillScreen, 'is-tab-focus': tabFocus, 'is-touch': touchUi }">
           <video
             :key="videoKey"
             ref="player"
             :src="sourceUrl"
             :aria-label="activeEpisode ? `播放${detail.title}第 ${activeEpisode.season} 季第 ${activeEpisode.episode} 集` : `播放${detail.title}`"
             tabindex="0"
-            controls
+            :controls="!touchUi"
             playsinline
             preload="metadata"
             @error="reportPlaybackError"
-            @loadedmetadata="playbackError = ''; applyResumePoint(); applyPlaybackRate()"
-            @timeupdate="scheduleReport"
-            @pause="reportProgress(true)"
-            @ended="reportProgress(true)"
-            @dblclick="toggleFullscreen"
+            @loadedmetadata="playbackError = ''; applyResumePoint(); applyPlaybackRate(); syncTransport()"
+            @timeupdate="scheduleReport(); syncTransport()"
+            @durationchange="syncTransport()"
+            @play="syncTransport(); revealControls()"
+            @pause="reportProgress(true); syncTransport(); revealControls()"
+            @ended="reportProgress(true); syncTransport(); revealControls()"
+            @dblclick="touchUi ? undefined : toggleFullscreen()"
           >
             当前浏览器不支持网页视频。<a :href="downloadUrl" download>下载原文件</a>后可用本地播放器观看。
           </video>
+
+          <!-- Touch transport: play/pause and a scrubber we draw ourselves, so the
+               native knob and its double-tap ripple never appear over the picture. -->
+          <div
+            v-if="touchUi && sourceUrl"
+            class="watch-transport"
+            :class="{ 'is-hidden': !controlsShown }"
+            @click.self="controlsShown = playing ? false : true"
+          >
+            <button
+              class="watch-transport-button"
+              type="button"
+              :aria-label="playing ? '暂停' : '播放'"
+              data-test="touch-play"
+              @click="togglePlay"
+            >
+              <PublicIcon :name="playing ? 'pause' : 'play'" />
+            </button>
+            <span class="watch-transport-clock" data-test="touch-clock">{{ clockTime(progress) }}</span>
+            <div
+              class="watch-transport-track"
+              role="slider"
+              tabindex="0"
+              aria-label="播放进度"
+              :aria-valuemin="0"
+              :aria-valuemax="Math.round(duration)"
+              :aria-valuenow="Math.round(progress)"
+              :aria-valuetext="`${clockTime(progress)} / ${clockTime(duration)}`"
+              data-test="touch-track"
+              @pointerdown.prevent="onScrubStart"
+              @pointermove.prevent="onScrubMove"
+              @pointerup.prevent="onScrubEnd"
+              @pointercancel="onScrubEnd"
+              @keydown.left.prevent="seekBy(-seekStep)"
+              @keydown.right.prevent="seekBy(seekStep)"
+            >
+              <span class="watch-transport-fill" :style="{ inlineSize: `${duration ? (progress / duration) * 100 : 0}%` }" />
+            </div>
+            <span class="watch-transport-clock">{{ clockTime(duration) }}</span>
+          </div>
+
           <p v-if="seekNotice" class="watch-seek" aria-hidden="true">{{ seekNotice }}</p>
           <p v-else-if="resumeNotice" class="watch-seek" role="status" data-test="resume-notice">{{ resumeNotice }}</p>
           <div v-if="isFullscreen" class="watch-overlay">
@@ -525,22 +650,91 @@ watch(videoKey, () => {
 .watch-stage video:focus-visible { outline: none; }
 .watch-stage.is-tab-focus video:focus-visible { outline: 2px solid var(--accent-strong); outline-offset: 2px; }
 
+/* Touch transport: our own bar along the bottom of the picture, replacing the
+   native one so no scrubber knob or double-tap ripple is drawn over the video. */
+.watch-transport {
+  position: absolute;
+  z-index: 4;
+  inset-inline: 0;
+  inset-block-end: 0;
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.5rem 0.7rem calc(0.5rem + env(safe-area-inset-bottom, 0px));
+  background: linear-gradient(to top, rgb(0 0 0 / 0.82), rgb(0 0 0 / 0));
+  transition: opacity var(--dur-fast) var(--ease);
+}
+.watch-transport.is-hidden { opacity: 0; pointer-events: none; }
+.watch-transport-button {
+  display: grid;
+  place-items: center;
+  flex: none;
+  inline-size: 2.4rem;
+  block-size: 2.4rem;
+  border: 0;
+  border-radius: 50%;
+  background: rgb(255 255 255 / 0.14);
+  color: #fff;
+}
+.watch-transport-button :deep(svg) { inline-size: 1.1rem; block-size: 1.1rem; }
+.watch-transport-clock {
+  flex: none;
+  color: rgb(255 255 255 / 0.82);
+  font-size: 0.74rem;
+  font-variant-numeric: tabular-nums;
+}
+/* The track is tall enough to grab with a finger; the visible line stays thin. */
+.watch-transport-track {
+  position: relative;
+  flex: 1 1 auto;
+  min-inline-size: 0;
+  block-size: 1.9rem;
+  cursor: pointer;
+  touch-action: none;
+}
+.watch-transport-track::before {
+  content: '';
+  position: absolute;
+  inset-inline: 0;
+  inset-block-start: 50%;
+  block-size: 3px;
+  border-radius: 2px;
+  background: rgb(255 255 255 / 0.26);
+  transform: translateY(-50%);
+}
+.watch-transport-fill {
+  position: absolute;
+  inset-inline-start: 0;
+  inset-block-start: 50%;
+  block-size: 3px;
+  border-radius: 2px;
+  background: var(--accent);
+  transform: translateY(-50%);
+}
+.watch-transport-track:focus-visible { outline: 2px solid var(--accent-strong); outline-offset: 3px; border-radius: var(--radius-xs); }
+
+
+/* Feedback sits in the bottom-right corner rather than mid-picture, so a seek or
+   resume message never covers the part of the frame being watched. The native
+   control bar occupies the very bottom on desktop, so the message clears it. */
 .watch-seek {
   position: absolute;
-  inset-block-start: 50%;
-  inset-inline-start: 50%;
+  z-index: 6;
+  inset-block-end: 3.4rem;
+  inset-inline-end: 0.9rem;
   margin: 0;
-  padding: 0.55rem 1rem;
+  padding: 0.45rem 0.8rem;
   border-radius: var(--radius-pill);
   background: rgb(0 0 0 / 0.72);
   color: #fff;
-  font-size: 0.9rem;
+  font-size: 0.84rem;
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
-  transform: translate(-50%, -50%);
   pointer-events: none;
   backdrop-filter: blur(6px);
 }
+/* On touch the transport bar is taller, so the message lifts above it. */
+.watch-stage.is-touch .watch-seek { inset-block-end: calc(3.6rem + env(safe-area-inset-bottom, 0px)); }
 .watch-overlay {
   position: absolute;
   z-index: 5;

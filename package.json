@@ -20,6 +20,7 @@
     "test:actors": "node --test tests/actors.test.mjs",
     "test:pager": "node --test tests/browse-pager.test.mjs",
     "test:classify": "node --test tests/admin-classify.test.mjs",
+    "test:player": "node --test tests/player-controls.test.mjs",
     "test:cards": "node --test tests/card-titles.test.mjs",
     "test:pagestyles": "node --test tests/pager-uniform.test.mjs",
     "backup": "node scripts/backup.mjs",
