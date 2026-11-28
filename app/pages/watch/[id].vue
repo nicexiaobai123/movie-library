@@ -344,6 +344,27 @@ const SWIPE_STEP = 10
 // The zone hint appears once per visit so the tap targets are discoverable.
 const seekHintShown = ref(false)
 let hintTimer: ReturnType<typeof setTimeout> | undefined
+
+// The title card names what is playing when the picture first appears, then fades,
+// so a viewer catching the middle of a series always knows which episode this is.
+const titleCardShown = ref(false)
+let titleCardTimer: ReturnType<typeof setTimeout> | undefined
+
+const titleCardText = computed(() => {
+  const title = detail.value?.title ?? ''
+  if (detail.value?.kind !== 'series' || !activeEpisode.value) return title
+  return `${title} 第 ${activeEpisode.value.season} 季第 ${activeEpisode.value.episode} 集`
+})
+
+function showTitleCard() {
+  if (!titleCardText.value) return
+  if (titleCardTimer !== undefined) clearTimeout(titleCardTimer)
+  titleCardShown.value = true
+  titleCardTimer = setTimeout(() => {
+    titleCardTimer = undefined
+    titleCardShown.value = false
+  }, 4000)
+}
 const swipe = { active: false, startX: 0, startY: 0, base: 0, moved: false, pointerId: -1 }
 let swipeTimer: ReturnType<typeof setTimeout> | undefined
 
@@ -506,6 +527,11 @@ onMounted(() => {
   touchUi.value = window.matchMedia?.('(pointer: coarse)').matches ?? false
   playbackRate.value = readStoredRate()
   applyPlaybackRate()
+  // `preload="metadata"` can finish before this component's listeners are attached,
+  // so ask for the title card directly as well as on the media events.
+  void nextTick(() => {
+    if (playerReady()) showTitleCard()
+  })
 })
 onBeforeUnmount(() => {
   window.removeEventListener('keydown', handlePlayerKey, true)
@@ -516,6 +542,7 @@ onBeforeUnmount(() => {
   if (reportTimer !== undefined) clearTimeout(reportTimer)
   if (hideTimer !== undefined) clearTimeout(hideTimer)
   if (hintTimer !== undefined) clearTimeout(hintTimer)
+  if (titleCardTimer !== undefined) clearTimeout(titleCardTimer)
   if (swipeTimer !== undefined) clearTimeout(swipeTimer)
   stopEndedCountdown()
 })
@@ -571,9 +598,8 @@ watch(videoKey, () => {
       <header class="watch-heading">
         <p class="eyebrow">正在放映</p>
         <h1>{{ detail.title }}</h1>
-        <p v-if="activeEpisode" class="watch-episode">
+        <p v-if="activeEpisode" class="watch-episode" data-test="watch-episode">
           <span>第 {{ activeEpisode.season }} 季 · 第 {{ activeEpisode.episode }} 集</span>
-          <span v-if="activeEpisode" class="watch-episode-name">第 {{ activeEpisode.season }} 季第 {{ activeEpisode.episode }} 集</span>
         </p>
       </header>
 
@@ -597,7 +623,8 @@ watch(videoKey, () => {
             playsinline
             preload="metadata"
             @error="reportPlaybackError"
-            @loadedmetadata="playbackError = ''; applyResumePoint(); applyPlaybackRate(); syncTransport()"
+            @loadedmetadata="playbackError = ''; applyResumePoint(); applyPlaybackRate(); syncTransport(); showTitleCard()"
+            @canplay="showTitleCard()"
             @timeupdate="scheduleReport(); syncTransport()"
             @durationchange="syncTransport()"
             @play="syncTransport(); revealControls(); showZoneHintOnce()"
@@ -683,6 +710,15 @@ watch(videoKey, () => {
             </button>
             <span class="watch-episode-nav-label">下一集</span>
           </div>
+
+          <!-- What is playing, named in the top-left corner when the picture loads and
+               then faded out, so it never lingers over the film. -->
+          <transition name="watch-title-fade">
+            <p v-if="titleCardShown && titleCardText" class="watch-title-card" data-test="title-card">
+              <span class="watch-title-card-kind">{{ detail.kind === 'series' ? '剧集' : '电影' }}</span>
+              <span class="watch-title-card-text">{{ titleCardText }}</span>
+            </p>
+          </transition>
 
           <!-- Touch hint: the left and right thirds of the picture are seek zones.
                Shown briefly when playback starts so the gesture is discoverable. -->
@@ -1004,6 +1040,42 @@ watch(videoKey, () => {
   white-space: nowrap;
   backdrop-filter: blur(6px);
 }
+
+/* The title card sits in the top-left corner of the picture for a few seconds after
+   the video loads, then fades so nothing remains over the film. */
+.watch-title-card {
+  position: absolute;
+  z-index: 6;
+  inset-block-start: 0.9rem;
+  inset-inline-start: 0.9rem;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  max-inline-size: calc(100% - 1.8rem);
+  margin: 0;
+  padding: 0.4rem 0.75rem;
+  border-radius: var(--radius-pill);
+  background: rgb(0 0 0 / 0.7);
+  color: #fff;
+  font-size: 0.86rem;
+  line-height: 1.4;
+  backdrop-filter: blur(8px);
+  pointer-events: none;
+}
+.watch-title-card-kind {
+  flex: none;
+  padding: 0.02rem 0.36rem;
+  border-radius: var(--radius-pill);
+  background: var(--accent);
+  color: var(--on-accent);
+  font-size: 0.7rem;
+  font-weight: 600;
+}
+.watch-title-card-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.watch-title-fade-enter-active,
+.watch-title-fade-leave-active { transition: opacity 400ms var(--ease); }
+.watch-title-fade-enter-from,
+.watch-title-fade-leave-to { opacity: 0; }
 
 /* The left/right thirds are seek zones on touch; this hint names them once, briefly,
    just above the transport bar so it does not cover the picture itself. */
